@@ -1,75 +1,71 @@
-# Telnexa repository deployment report
+# Telnexa complete SaaS deployment report
 
-Status: billing foundation implemented and locally validated; full SaaS portal mission remains blocked/incomplete as detailed below.
+Execution date: 2026-08-15 (Europe/Berlin)
 
-## Implemented
+Branch: `agent/complete-saas-platform`
+Production safety posture: no real SMS sent; no carrier credentials invented; existing `/opt/telnexa`, Kyqra, Klyrow, middleware, n8n and Odoo data were not modified.
 
-- Private PostgreSQL billing service, one-shot migration, API and durable middleware outbox worker as additive Docker services.
-- Decimal wallet balances, row-locked reservations, append-only ledger with a PostgreSQL mutation-rejection trigger, idempotent simulator charging, releases, finalization and postpaid credit limits.
-- Effective-dated provider/sell rate resolution, GSM-7/UCS-2 multipart calculation, rate snapshots, usage and gross-profit records.
-- Invoice/payment data foundations, tenant-filtered wallet/ledger/message/invoice/usage APIs, Argon2 API keys, audit records, admin credits, portal/admin shells and OpenAPI.
-- Billing database backup/restore integration, private Prometheus scrape, Nginx routes/security headers, generated billing secrets, and complete architecture/operations documentation set.
+The supplied mission document is truncated at line 743 in the middle of §23 (customer webhook retries). Every requirement present in the repository was assessed; the missing remainder cannot be inferred safely.
 
-- Custom Jasmin 0.11.0 image with environment materialization, private jCli, HTTP API, SMPP server, DLR/MO daemons, idempotent API-user bootstrap, quotas, and persistent `/etc/jasmin` volume.
-- Authenticated Redis with AOF, RabbitMQ AMQP broker, persistent volumes, health-gated dependencies, private internal networking, resource limits, log rotation, and restart policies.
-- Nginx HTTP/HTTPS image with ACME webroot, TLS 1.2/1.3, HSTS after certificate installation, rate limiting, privacy-preserving access logs, and reserved `api.telnexa.co` endpoint.
-- Certbot profile and DNS-validating TLS initialization script.
-- HMAC-SHA256 webhook relay for inbound, DLR, and failed events with timestamp/replay guidance and secret-free logs.
-- Private Prometheus/node-exporter monitoring and host/container health tooling.
-- Startup, shutdown, restart, logs, health, backup, guarded restore, console, provider test, TLS, secret generation, and deployment update scripts.
-- Provider/customer onboarding guides, credential templates, webhook payload examples, firewall guidance, backup/restore and upgrade procedures.
+## IMPLEMENTED
 
-## Exposure model
+- Docker-first private commercial control plane: PostgreSQL, API, outbox worker, migration job, Redis/RabbitMQ/Jasmin integration topology, reverse proxy, Prometheus, Grafana provisioning, exporters and guarded backup/restore tooling.
+- Tenant-owned wallets, reservations, fixed-precision rates, append-only ledger entries, immutable audit rows, invoice/payment foundations, usage/margin records, idempotent message charging and PostgreSQL row-level-security policies.
+- GSM-7 extension/UCS-2 multipart accounting, effective-dated provider/sell rates, per-segment cost snapshots, atomic reserve/finalize/release and duplicate-charge protection.
+- Scoped Argon2 API keys, request IDs, standard HTTP errors, OpenAPI, strict response headers, secure session cookies, login throttling, logout, password-reset token/session invalidation foundations and MFA-ready user records.
+- Tenant-scoped messages/detail/timeline, balance, ledger, rates, invoices, invoice PDF, usage CSV, contacts/consent, senders, templates, campaigns, inbox, webhooks and finance summary APIs.
+- Consent-source enforcement; STOP/HELP policy foundation; opted-out marketing suppression; unapproved-sender rejection; large/marketing campaign approval gates and disabled automatic dispatch.
+- Durable MO/DLR records and deduplication, conversation keys, provider health/circuit state, route versions and dry-run failover preview.
+- HMAC middleware outbox with event/correlation/idempotency headers, constant-time secret comparison at privileged boundaries, bounded exponential retry and DLQ state.
+- Customer/admin responsive portal shells and developer OpenAPI. These expose the product information architecture but are not claimed as a complete interactive frontend.
+- Existing production Jasmin stack remains healthy with private Redis, RabbitMQ and PostgreSQL; public carrier routes were not added.
 
-Only ports 80/443 are published. Redis 6379, RabbitMQ 5672/15672, Jasmin HTTP 1401, jCli 8990, SMPP 2775, Prometheus 9090, node-exporter 9100, and webhook relay 8080 are Docker-internal. Future customer SMPP requires an explicit VPN or fixed-IP firewall decision.
+## DEPLOYED
 
-## Required external actions
+- Additive isolated Compose project `telnexa-saas`: `billing-db`, `billing-migrate`, `billing-api`, and `billing-worker`.
+- Deployment uses private Docker networks and publishes no host ports. This prevents collision with the working `telnexa` project managed from `/opt/telnexa`.
+- Production-like database migrations, RLS and immutability triggers are active in the isolated deployment.
+- Not promoted behind public `api/app/admin.telnexa.co` routing because DNS/TLS/public reverse-proxy approval and production identity decisions remain external launch gates.
 
-- Deploy to the target server and create `.env` with generated production credentials.
-- Point `sms.telnexa.co` and `api.telnexa.co` A records to `37.27.128.39`; wait for propagation.
-- Set a real Let's Encrypt operations email and run `scripts/tls-init.sh`.
-- Supply real carrier host/port/system ID/password/bind/TON/NPI/TPS/DLR/sender policy values.
-- Set the existing middleware HTTPS base URL and share the HMAC secret through its secret manager.
-- Configure encrypted off-host backup storage and host firewall/SSH hardening.
-- Supply an SSH identity accepted by `root@37.27.128.39` (or a least-privilege deployment account) so the live stack can be inventoried, backed up, deployed and tested.
-- Confirm middleware's production Telnexa billing-event namespace/signing contract and provision its dedicated API/HMAC identity.
-- Add DNS/SAN certificate coverage for `app.telnexa.co` and `admin.telnexa.co`.
+## TESTED/PASS
 
-No provider credentials are included, no production route is preconfigured, and no real SMS has been or will be sent during repository validation.
+- Python suite: 18/18 passing, covering money/idempotency, reserve/release/finalize, prepaid/postpaid limits, GSM-7/UCS-2, rate specificity/margin, tenant filtering, invoices, payment uniqueness, consent/sender/campaign guardrails, MO STOP/HELP, DLR deduplication/timeline, failover, webhook secret display and secure-login throttling/cookies/logout.
+- Compose schema/build/migration/API health/OpenAPI: PASS.
+- Deployed simulator smoke: MT submission and settlement, Unicode, DLR `delivered`, MO `STOP`, suppression event and approved simulator route: PASS.
+- PostgreSQL ledger mutation rejection: PASS.
+- PostgreSQL RLS enabled for messages, contacts, ledger and audit (and all other tenant tables enumerated by migration): PASS.
+- Network isolation: deployed PostgreSQL/API/worker have no published ports: PASS.
+- Regression safety: existing Telnexa Jasmin and representative Kyqra/Klyrow health remained unchanged: PASS.
+- HMAC webhook relay test, Jasmin credential/no-route behavior, Redis/Jasmin persistence and infrastructure checks inherited from the merged production stack remain documented and covered by repository tests/tooling.
 
-## Remaining implementation gaps
+## SIMULATOR-ONLY
 
-The mission's full definition of done is not claimed. Customer/admin shells still need complete login/logout/reset/MFA, CSRF and role workflows; interactive API/SMPP/sender/webhook/team management; invoices PDF/CSV and statements; payment webhook/refund flows; configurable quotas/TPS; pricing CSV tools; comprehensive admin analytics; notification templates; and the full required endpoint/security/tenant matrix. These are independent engineering items, but production deployment and integration evidence cannot proceed without host access. The current branch is suitable only as a reviewed billing foundation, not production activation.
+- MT message acceptance, segment billing, reservations, settlement/release, message states and DLRs.
+- MO/inbox, STOP/HELP, suppression, duplicate-MO/DLR handling and conversation association.
+- Provider health, open-circuit exclusion, approved backup selection and route dry-run.
+- Campaign creation/approval gating and portal/API flows. No campaign dispatcher sends real traffic.
+- SMPP/customer/provider behavior has only simulator/Jasmin-local evidence; there is no approved upstream carrier bind.
 
-## Validation results
+## BLOCKED-EXTERNAL
 
-Validated on 2026-08-15 using a separate `telnexa-validation` Compose project and loopback-only test web ports so the existing server deployment was not modified.
+- Carrier/provider credentials, approved routes, sender registrations, destination authorizations, throughput/bind limits and DLR/MO contracts were not supplied.
+- Public DNS and certificate authorization for `api.telnexa.co`, `app.telnexa.co`, `admin.telnexa.co` (and optional monitoring hostname) are not established by this mission context.
+- Middleware production API key/HMAC identity and its final event-schema acceptance are unavailable. Default private endpoint is `10.40.0.1`; no Odoo database write was attempted.
+- Payment processor credentials/webhook signing secrets, tax/jurisdiction configuration, legal/compliance approval and invoice-number jurisdiction rules are unavailable.
+- SMTP/email provider credentials are unavailable, so verification/reset tokens have durable foundations but no production mail delivery.
+- KMS/secret-manager integration is unavailable; webhook secret plaintext is display-once and its production encrypted recovery/rotation path must use an approved KMS.
+- Public reverse-proxy cutover cannot be done safely without deciding how the existing `/opt/telnexa` stack and shared ingress should route the new private service.
+- The source mission is incomplete after line 743, so any requirements in the absent tail are an external specification blocker.
 
-| Check | Result |
-|---|---|
-| Docker Compose parsing and service dependency graph | PASS |
-| Clean custom image builds with secret-excluding `.dockerignore` | PASS |
-| RabbitMQ, authenticated Redis, Jasmin, relay, Nginx, Prometheus health | PASS |
-| Redis/RabbitMQ/Jasmin internal DNS connectivity | PASS |
-| Only Nginx has published host ports | PASS |
-| Redis, RabbitMQ, Jasmin jCli/API/SMPP, relay, and monitoring isolation | PASS |
-| `unless-stopped` restart policy on all long-running services | PASS |
-| Pre-TLS health endpoint and HTTP 426 API rejection | PASS |
-| Missing and invalid Jasmin API authentication rejection | PASS |
-| Valid API authentication with expected 412 no-route response | PASS; no SMS sent |
-| Middleware group/user bootstrap and throughput quotas | PASS |
-| Zero fake SMPP connectors and zero production MT routes | PASS |
-| Jasmin identity/config persistence after container recreation | PASS |
-| Redis AOF value persistence after container recreation | PASS |
-| Webhook relay health and safe 503 when middleware target is unset | PASS |
-| HMAC signature unit test covering timestamp and exact raw body | PASS |
-| Backup archives for repository/`.env`, Jasmin config, and Redis state | PASS |
-| Shell/Python syntax, Compose config, and Git whitespace checks | PASS |
-| Billing image build and isolated PostgreSQL migration | PASS |
-| Billing unit/simulator suite | PASS — 10/10 |
-| PostgreSQL ledger UPDATE rejection | PASS |
-| Billing database restart persistence | PASS |
-| Custom-format dump and isolated restore | PASS |
-| Billing PostgreSQL public port exposure | PASS — none |
+## MANUAL-LAUNCH-ACTIONS
 
-TLS issuance was not attempted because public DNS is not assumed. A physical server reboot and real provider bind/SMS require the target host and authorized carrier credentials; restart/recreation behavior was tested through Docker instead.
+1. Review and merge the production PR; back up `/opt/telnexa` and the isolated commercial database.
+2. Provision a dedicated production secret set in the approved secret manager; rotate all validation `.env` values and configure a real Grafana password.
+3. Approve the additive Compose project/service naming and connect only the shared ingress to `billing-api`; do not rename or replace the existing `telnexa` project in place.
+4. Create/verify DNS, issue SAN certificates, add authenticated routes for API/client/admin, and confirm no internal database, broker, Jasmin management, simulator or monitoring ports are public.
+5. Provision the dedicated middleware Telnexa identity; verify HMAC vectors, replay window, idempotency, retry/DLQ and Odoo/n8n mappings end to end.
+6. Complete legal/compliance review per enabled country, configure STOP/HELP/quiet hours, approve sender IDs and load effective-dated sell/provider rates with minimum-margin review.
+7. Supply approved carrier sandbox credentials first; run bind, MT, DLR, MO, multipart, Unicode, throttle and failover acceptance tests only to explicitly authorized destinations.
+8. Configure SMTP and payment-provider sandboxes, then validate email verification/reset and signed payment lifecycle/refund/chargeback events without raw card storage.
+9. Configure encrypted off-host backups, retention, alerting and a restore drill; perform a controlled restart/reboot test before traffic.
+10. Obtain launch sign-off from operations, billing, security and compliance. Enable real routes and campaigns only after all gates pass; never reuse simulator credentials.

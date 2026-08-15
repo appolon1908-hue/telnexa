@@ -276,6 +276,26 @@ services:
     mem_limit: 256m
     cpus: 1
 
+  grafana:
+    image: grafana/grafana:12.1.1
+    restart: unless-stopped
+    <<: *default-security
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-telnexa-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_DOMAIN: ${GRAFANA_DOMAIN:-monitoring.telnexa.co}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    expose: ["3000"]
+    networks: [monitoring]
+    depends_on: [prometheus]
+    logging: *default-logging
+    mem_limit: 512m
+    cpus: 1
+
 networks:
   backend:
     internal: true
@@ -296,4 +316,5 @@ volumes:
   letsencrypt:
   acme-webroot:
   prometheus-data:
+  grafana-data:
   billing-db-data:
