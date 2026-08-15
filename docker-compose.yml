@@ -1,0 +1,52 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks: [telnexa]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks: [telnexa]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  jasmin:
+    image: jookies/jasmin:latest
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${JASMIN_HTTP_PORT:-1401}:1401"
+      - "${JASMIN_SMPP_PORT:-2775}:2775"
+    volumes:
+      - jasmin_store:/etc/jasmin/store
+    networks: [telnexa]
+
+networks:
+  telnexa:
+    driver: bridge
+
+volumes:
+  redis_data:
+  rabbitmq_data:
+  jasmin_store:
