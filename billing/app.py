@@ -1,4 +1,4 @@
-import secrets, uuid, os
+import secrets, uuid, os, io, csv
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from datetime import datetime, timezone
@@ -12,12 +12,12 @@ from .db import Base,engine,session
 from .models import *
 from .engine import send_simulated,credit
 from .schemas import SendRequest,CreditRequest
-app=FastAPI(title="Telnexa Billing API",version="1.0.0",docs_url="/developer/openapi")
+app=FastAPI(title="Telnexa Commercial API",version="1.0.0",docs_url="/developer/openapi",openapi_url="/api/v1/openapi.json")
 Base.metadata.create_all(engine)
 SENDS=Counter("telnexa_billing_sends_total","Billing sends",["status"]); DUPES=Counter("telnexa_billing_idempotent_duplicates_total","Duplicate requests"); ph=PasswordHasher()
 @app.middleware("http")
 async def security(request,call_next):
-    response=await call_next(request);response.headers.update({"X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY","Referrer-Policy":"same-origin","Content-Security-Policy":"default-src 'self'; style-src 'self' 'unsafe-inline'","Strict-Transport-Security":"max-age=31536000; includeSubDomains"});return response
+    request_id=request.headers.get("X-Request-ID") or str(uuid.uuid4());response=await call_next(request);response.headers.update({"X-Request-ID":request_id,"X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY","Referrer-Policy":"same-origin","Content-Security-Policy":"default-src 'self'; style-src 'self' 'unsafe-inline'","Strict-Transport-Security":"max-age=31536000; includeSubDomains"});return response
 def tenant(x_tenant_id:str=Header(...),x_api_key:str=Header(...),db:Session=Depends(session)):
     row=db.scalar(select(ApiKey).where(ApiKey.tenant_id==x_tenant_id,ApiKey.prefix==x_api_key[:12],ApiKey.revoked==False));
     try:
@@ -37,6 +37,10 @@ def send(body:SendRequest,idempotency_key:str=Header(...),x_correlation_id:str|N
     if not account or account.tenant_id!=tenant_id:raise HTTPException(404,"billing_account_not_found")
     prior=db.scalar(select(Message).where(Message.tenant_id==tenant_id,Message.idempotency_key==idempotency_key));
     if prior:DUPES.inc();return message_json(prior)
+    contact=db.scalar(select(Contact).where(Contact.tenant_id==tenant_id,Contact.phone==body.destination))
+    if body.category=="marketing" and (not contact or contact.consent_status!="opted_in" or contact.opted_out_at):raise HTTPException(409,"marketing_consent_required_or_suppressed")
+    sender=db.scalar(select(Sender).where(Sender.tenant_id==tenant_id,Sender.sender==body.sender))
+    if sender and sender.status!="approved":raise HTTPException(409,"sender_not_approved")
     try:msg=send_simulated(db,account.id,body.destination,body.sender,body.content,idempotency_key,x_correlation_id or str(uuid.uuid4()),body.simulator_outcome);db.commit();SENDS.labels(msg.status).inc();return message_json(msg)
     except ValueError as e:db.rollback();SENDS.labels("rejected").inc();raise HTTPException(402,str(e))
 def message_json(m):return {"message_id":m.id,"status":m.status,"encoding":m.encoding,"characters":m.character_count,"segments":m.segments,"estimated_charge":str(m.estimated_sell_amount),"provider_message_id":m.provider_message_id,"simulated":m.provider=="simulator"}
@@ -49,6 +53,17 @@ def wallet(tenant_id:str=Depends(tenant),db:Session=Depends(session)):
 def ledger(tenant_id:str=Depends(tenant),db:Session=Depends(session)):return {"items":[{"id":x.id,"amount":str(x.amount),"direction":x.direction,"type":x.type,"reference_id":x.reference_id,"timestamp":x.created_at} for x in db.scalars(select(LedgerEntry).where(LedgerEntry.tenant_id==tenant_id).order_by(LedgerEntry.created_at.desc())).all()]}
 @app.get("/api/v1/billing/invoices")
 def invoices(tenant_id:str=Depends(tenant),db:Session=Depends(session)):return {"items":[{"id":x.id,"number":x.number,"total":str(x.total),"status":x.status} for x in db.scalars(select(Invoice).where(Invoice.tenant_id==tenant_id)).all()]}
+@app.get("/api/v1/billing/invoices/{invoice_id}.pdf")
+def invoice_pdf(invoice_id:str,tenant_id:str=Depends(tenant),db:Session=Depends(session)):
+    from reportlab.pdfgen import canvas
+    inv=db.scalar(select(Invoice).where(Invoice.id==invoice_id,Invoice.tenant_id==tenant_id));
+    if not inv:raise HTTPException(404,"invoice_not_found")
+    output=io.BytesIO();pdf=canvas.Canvas(output);pdf.setTitle(inv.number);pdf.drawString(72,780,"TELNEXA INVOICE");pdf.drawString(72,750,f"Invoice: {inv.number}");pdf.drawString(72,730,f"Period: {inv.period_start.date()} — {inv.period_end.date()}");pdf.drawString(72,710,f"Total: {inv.total} {inv.currency}");pdf.drawString(72,690,f"Status: {inv.status}");pdf.showPage();pdf.save();return Response(output.getvalue(),media_type="application/pdf",headers={"Content-Disposition":f'attachment; filename="{inv.number}.pdf"'})
+@app.get("/api/v1/billing/usage.csv")
+def usage_csv(tenant_id:str=Depends(tenant),db:Session=Depends(session)):
+    output=io.StringIO();writer=csv.writer(output);writer.writerow(["message_id","timestamp","country","provider","sender","segments","status","revenue","provider_cost"])
+    for x in db.scalars(select(Usage).where(Usage.tenant_id==tenant_id).order_by(Usage.created_at)).all():writer.writerow([x.message_id,x.created_at.isoformat(),x.country,x.provider,x.sender,x.segments,x.status,str(x.revenue),str(x.cost)])
+    return Response(output.getvalue(),media_type="text/csv",headers={"Content-Disposition":'attachment; filename="telnexa-usage.csv"'})
 @app.get("/api/v1/billing/usage")
 def usage(tenant_id:str=Depends(tenant),db:Session=Depends(session)):
     r=db.execute(select(func.count(Usage.id),func.coalesce(func.sum(Usage.segments),0),func.coalesce(func.sum(Usage.revenue),0),func.coalesce(func.sum(Usage.cost),0)).where(Usage.tenant_id==tenant_id)).one();return {"messages":r[0],"segments":r[1],"revenue":str(r[2]),"provider_cost":str(r[3]),"gross_profit":str(r[2]-r[3])}
@@ -69,3 +84,8 @@ def revoke_key(key_id:str,tenant_id:str=Depends(tenant),db:Session=Depends(sessi
 def portal():return """<!doctype html><meta name=viewport content='width=device-width'><title>Telnexa Portal</title><style>body{font:16px system-ui;max-width:1100px;margin:auto;padding:2rem;background:#08101f;color:#edf3ff}nav{display:flex;gap:1rem;flex-wrap:wrap}.card{background:#131f35;padding:1.2rem;border-radius:14px;margin-top:1rem}</style><h1>Telnexa</h1><nav>Dashboard · Messages · API keys · Developer · SMPP · Sender IDs · Webhooks · Billing · Team</nav><div class=card><h2>Customer portal</h2><p>Use tenant-authenticated APIs for live wallet, message, invoice, statement, rate and usage data. Simulator mode is clearly labelled.</p></div>"""
 @app.get("/admin",response_class=HTMLResponse)
 def admin():return """<!doctype html><meta name=viewport content='width=device-width'><title>Telnexa Admin</title><style>body{font:16px system-ui;max-width:1100px;margin:auto;padding:2rem;background:#160d20;color:#fff}nav{display:flex;gap:1rem;flex-wrap:wrap}.card{background:#291936;padding:1.2rem;border-radius:14px;margin-top:1rem}</style><h1>Telnexa Admin</h1><nav>Customers · Billing · Pricing · Providers · Margins · Messaging · Security · Audit</nav><div class=card><h2>Billing operations</h2><p>Privileged mutations require admin authentication, reason, idempotency key, and immutable audit evidence.</p></div>"""
+
+from .product_api import router as product_router
+from .auth_api import router as auth_router
+app.include_router(product_router)
+app.include_router(auth_router)
