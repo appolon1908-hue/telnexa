@@ -134,13 +134,15 @@ services:
     environment:
       SMS_DOMAIN: ${SMS_DOMAIN:-sms.telnexa.co}
       API_DOMAIN: ${API_DOMAIN:-api.telnexa.co}
+      PORTAL_DOMAIN: ${PORTAL_DOMAIN:-app.telnexa.co}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-admin.telnexa.co}
     ports:
       - "${HTTP_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:80"
       - "${HTTPS_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:443"
     volumes:
       - letsencrypt:/etc/letsencrypt:ro
       - acme-webroot:/var/www/certbot:ro
-    networks: [edge, public]
+    networks: [edge, public, billing]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
       interval: 20s
@@ -149,6 +151,81 @@ services:
     logging: *default-logging
     mem_limit: 512m
     cpus: 2
+
+  billing-db:
+    image: postgres:17.6-alpine@sha256:d5f196a551b5cef1c70853c6dd588f456d16ca4ea733e3f31c75bc1ae2f65f3f
+    restart: unless-stopped
+    <<: *default-security
+    environment:
+      POSTGRES_DB: ${BILLING_DB_NAME:-telnexa_billing}
+      POSTGRES_USER: ${BILLING_DB_USER:-telnexa_billing}
+      POSTGRES_PASSWORD: ${BILLING_DB_PASSWORD:?set BILLING_DB_PASSWORD in .env}
+    volumes: [billing-db-data:/var/lib/postgresql/data]
+    expose: ["5432"]
+    networks: [billing]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    mem_limit: 2g
+    cpus: 2
+
+  billing-migrate:
+    build: {context: ., dockerfile: billing/Dockerfile}
+    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    command: ["python", "-m", "billing.migrate"]
+    restart: "no"
+    environment: &billing-environment
+      BILLING_DATABASE_URL: postgresql+psycopg://${BILLING_DB_USER:-telnexa_billing}:${BILLING_DB_PASSWORD}@billing-db:5432/${BILLING_DB_NAME:-telnexa_billing}
+      BILLING_JWT_SECRET: ${BILLING_JWT_SECRET:?set BILLING_JWT_SECRET in .env}
+      BILLING_ADMIN_TOKEN: ${BILLING_ADMIN_TOKEN:?set BILLING_ADMIN_TOKEN in .env}
+      BILLING_MIDDLEWARE_URL: ${BILLING_MIDDLEWARE_URL:-https://10.40.0.1/api/v1/events/telnexa}
+      BILLING_MIDDLEWARE_API_KEY: ${BILLING_MIDDLEWARE_API_KEY:?set BILLING_MIDDLEWARE_API_KEY in .env}
+      BILLING_MIDDLEWARE_HMAC_SECRET: ${BILLING_MIDDLEWARE_HMAC_SECRET:?set BILLING_MIDDLEWARE_HMAC_SECRET in .env}
+      BILLING_SIMULATOR_ENABLED: ${BILLING_SIMULATOR_ENABLED:-true}
+    depends_on: {billing-db: {condition: service_healthy}}
+    networks: [billing]
+
+  billing-api:
+    build: {context: ., dockerfile: billing/Dockerfile}
+    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    restart: unless-stopped
+    <<: *default-security
+    environment: *billing-environment
+    depends_on:
+      billing-db: {condition: service_healthy}
+      billing-migrate: {condition: service_completed_successfully}
+    expose: ["8000"]
+    networks: [billing, edge]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready',timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 1g
+    cpus: 2
+
+  billing-worker:
+    build: {context: ., dockerfile: billing/Dockerfile}
+    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    command: ["python", "-m", "billing.worker"]
+    restart: unless-stopped
+    <<: *default-security
+    environment: *billing-environment
+    depends_on:
+      billing-db: {condition: service_healthy}
+      billing-migrate: {condition: service_completed_successfully}
+    networks: [billing, egress]
+    read_only: true
+    tmpfs: [/tmp]
+    logging: *default-logging
+    mem_limit: 512m
+    cpus: 1
 
   certbot:
     image: certbot/certbot:v4.2.0@sha256:9626d72120577cf72da4fc7948806e9993598981720a4cbe04340a502468d67b
@@ -206,6 +283,8 @@ networks:
     internal: true
   monitoring:
     internal: true
+  billing:
+    internal: true
   public: {}
   egress: {}
 
@@ -217,3 +296,4 @@ volumes:
   letsencrypt:
   acme-webroot:
   prometheus-data:
+  billing-db-data:

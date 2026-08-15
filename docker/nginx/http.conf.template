@@ -3,7 +3,7 @@ log_format telnexa_noargs '$remote_addr [$time_local] "$request_method $uri $ser
 
 server {
     listen 80 default_server;
-    server_name ${SMS_DOMAIN} ${API_DOMAIN};
+    server_name ${SMS_DOMAIN} ${API_DOMAIN} ${PORTAL_DOMAIN} ${ADMIN_DOMAIN};
     server_tokens off;
     access_log /var/log/nginx/access.log telnexa_noargs;
 
