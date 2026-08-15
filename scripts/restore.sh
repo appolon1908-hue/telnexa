@@ -14,4 +14,8 @@ for volume in jasmin-config redis-data; do
     sh -c "find /target -mindepth 1 -delete && tar -C /target -xzf /backup/${volume}.tar.gz"
 done
 "${COMPOSE[@]}" up -d --build
+if test -f "$backup/billing.pgdump"; then
+  "${COMPOSE[@]}" exec -T billing-db sh -c 'dropdb --if-exists --username="$POSTGRES_USER" "$POSTGRES_DB" && createdb --username="$POSTGRES_USER" "$POSTGRES_DB"'
+  "${COMPOSE[@]}" exec -T billing-db sh -c 'pg_restore --exit-on-error --no-owner --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' < "$backup/billing.pgdump"
+fi
 "$REPO_DIR/scripts/health.sh"
