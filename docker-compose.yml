@@ -1,52 +1,219 @@
-services:
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
-    networks: [telnexa]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+name: telnexa
 
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+x-security: &default-security
+  security_opt:
+    - no-new-privileges:true
+
+services:
   rabbitmq:
-    image: rabbitmq:3-management-alpine
+    image: rabbitmq:3.13-alpine@sha256:d7af1c87c5f1eda13fcfca06db452bf3aeab6619fc3358b68535c0c02c4e52bc
     restart: unless-stopped
+    <<: *default-security
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
     volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    networks: [telnexa]
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ./config/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    expose: ["5672"]
+    networks: [backend]
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    logging: *default-logging
+    mem_limit: 4g
+    cpus: 4
+
+  redis:
+    image: redis:7.4-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+    restart: unless-stopped
+    <<: *default-security
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    command: ["/bin/sh", "/usr/local/bin/start-redis"]
+    volumes:
+      - redis-data:/data
+      - ./config/redis/redis.conf:/etc/redis/redis.conf:ro
+      - ./scripts/redis-entrypoint.sh:/usr/local/bin/start-redis:ro
+    expose: ["6379"]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 15s
       timeout: 5s
-      retries: 5
+      retries: 10
+    logging: *default-logging
+    mem_limit: 2g
+    cpus: 2
 
   jasmin:
-    image: jookies/jasmin:latest
+    build:
+      context: .
+      dockerfile: docker/jasmin/Dockerfile
+      args:
+        JASMIN_IMAGE: ${JASMIN_IMAGE:-jookies/jasmin:0.11.0@sha256:3f049692d22fd66ab08a55073f79db96fe442473ede9615e8ac085ac505a1064}
+    image: telnexa/jasmin:${TELNEXA_IMAGE_TAG:-local}
     restart: unless-stopped
+    <<: *default-security
     depends_on:
-      redis:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:${JASMIN_HTTP_PORT:-1401}:1401"
-      - "${JASMIN_SMPP_PORT:-2775}:2775"
+      rabbitmq: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    environment:
+      AMQP_BROKER_HOST: rabbitmq
+      AMQP_BROKER_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      REDIS_CLIENT_HOST: redis
+      REDIS_CLIENT_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      JASMIN_ADMIN_USER: ${JASMIN_ADMIN_USER:-telnexa-admin}
+      JASMIN_ADMIN_PASSWORD: ${JASMIN_ADMIN_PASSWORD:?set JASMIN_ADMIN_PASSWORD in .env}
+      JASMIN_API_USER: ${JASMIN_API_USER:-middleware}
+      JASMIN_API_PASSWORD: ${JASMIN_API_PASSWORD:?set JASMIN_API_PASSWORD in .env}
+      JASMIN_API_GROUP: ${JASMIN_API_GROUP:-telnexa-api}
+      JASMIN_HTTP_THROUGHPUT: ${JASMIN_HTTP_THROUGHPUT:-20}
+      JASMIN_SMPPS_THROUGHPUT: ${JASMIN_SMPPS_THROUGHPUT:-20}
     volumes:
-      - jasmin_store:/etc/jasmin/store
-    networks: [telnexa]
+      - jasmin-config:/etc/jasmin
+      - jasmin-logs:/var/log/jasmin
+    expose: ["1401", "2775", "8990"]
+    networks: [backend, edge, egress]
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/telnexa-ready && python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:1401/ping', timeout=4)\""]
+      interval: 20s
+      timeout: 8s
+      retries: 15
+      start_period: 40s
+    logging: *default-logging
+    mem_limit: 8g
+    cpus: 6
+
+  webhook-relay:
+    build:
+      context: .
+      dockerfile: docker/webhook-relay/Dockerfile
+    image: telnexa/webhook-relay:${TELNEXA_IMAGE_TAG:-local}
+    restart: unless-stopped
+    <<: *default-security
+    environment:
+      WEBHOOK_TARGET_BASE_URL: ${WEBHOOK_TARGET_BASE_URL:-}
+      WEBHOOK_HMAC_SECRET: ${WEBHOOK_HMAC_SECRET:?set WEBHOOK_HMAC_SECRET in .env}
+      WEBHOOK_TIMEOUT_SECONDS: ${WEBHOOK_TIMEOUT_SECONDS:-10}
+    expose: ["8080"]
+    networks: [backend, egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    read_only: true
+    tmpfs: [/tmp]
+    mem_limit: 256m
+    cpus: 1
+
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+    image: telnexa/nginx:${TELNEXA_IMAGE_TAG:-local}
+    restart: unless-stopped
+    <<: *default-security
+    depends_on:
+      jasmin: {condition: service_healthy}
+      webhook-relay: {condition: service_healthy}
+    environment:
+      SMS_DOMAIN: ${SMS_DOMAIN:-sms.telnexa.co}
+      API_DOMAIN: ${API_DOMAIN:-api.telnexa.co}
+    ports:
+      - "${HTTP_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:80"
+      - "${HTTPS_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:443"
+    volumes:
+      - letsencrypt:/etc/letsencrypt:ro
+      - acme-webroot:/var/www/certbot:ro
+    networks: [edge, public]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    mem_limit: 512m
+    cpus: 2
+
+  certbot:
+    image: certbot/certbot:v4.2.0@sha256:9626d72120577cf72da4fc7948806e9993598981720a4cbe04340a502468d67b
+    profiles: ["tls"]
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - acme-webroot:/var/www/certbot
+    networks: [egress]
+
+  prometheus:
+    image: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+    restart: unless-stopped
+    <<: *default-security
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    expose: ["9090"]
+    networks: [monitoring, backend]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    mem_limit: 2g
+    cpus: 2
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1@sha256:d00a542e409ee618a4edc67da14dd48c5da66726bbd5537ab2af9c1dfc442c8a
+    restart: unless-stopped
+    <<: *default-security
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host/root
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+    expose: ["9100"]
+    networks: [monitoring]
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 1
 
 networks:
-  telnexa:
-    driver: bridge
+  backend:
+    internal: true
+  edge:
+    internal: true
+  monitoring:
+    internal: true
+  public: {}
+  egress: {}
 
 volumes:
-  redis_data:
-  rabbitmq_data:
-  jasmin_store:
+  rabbitmq-data:
+  redis-data:
+  jasmin-config:
+  jasmin-logs:
+  letsencrypt:
+  acme-webroot:
+  prometheus-data:
