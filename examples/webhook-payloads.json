@@ -1,0 +1,17 @@
+{
+  "inbound": {
+    "event": "inbound",
+    "received_at": 1786766400,
+    "data": {"id": "message-id", "from": "+4915112345678", "to": "Telnexa", "content": "Example inbound text", "coding": "0"}
+  },
+  "dlr": {
+    "event": "dlr",
+    "received_at": 1786766410,
+    "data": {"id": "message-id", "message_status": "DELIVRD", "level": "2", "connector": "carrier_primary"}
+  },
+  "failed": {
+    "event": "failed",
+    "received_at": 1786766420,
+    "data": {"id": "message-id", "message_status": "UNDELIV", "error": "provider-status"}
+  }
+}

@@ -1,11 +1,10 @@
+.git
 .env
 .env.*
 !.env.example
-backups/
+backups
 *.tar.gz
 *.log
 *.key
 *.pem
-.DS_Store
-__pycache__/
-*.py[cod]
+__pycache__
