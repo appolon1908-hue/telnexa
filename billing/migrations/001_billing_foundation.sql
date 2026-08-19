@@ -10,7 +10,7 @@ CREATE TRIGGER audit_log_immutable BEFORE UPDATE OR DELETE ON audit_log FOR EACH
 -- Defense in depth. The application role sets app.tenant_id per request in a
 -- hardened deployment; owners/migrations retain BYPASSRLS only for operations.
 DO $$ DECLARE t text; BEGIN
-  FOREACH t IN ARRAY ARRAY['wallets','ledger_entries','balance_reservations','messages','usage_records','invoices','api_keys','audit_log','billing_outbox','team_members','senders','contacts','templates','campaigns','webhooks','webhook_deliveries','message_events','inbound_messages','smpp_credentials'] LOOP
+  FOREACH t IN ARRAY ARRAY['wallets','ledger_entries','balance_reservations','messages','usage_records','invoices','api_keys','audit_log','billing_outbox','team_members','senders','contacts','templates','campaigns','webhooks','webhook_deliveries','message_events','inbound_messages','smpp_credentials','subaccounts','phone_numbers','consent_records'] LOOP
     IF to_regclass(t) IS NOT NULL THEN
       EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
       EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);

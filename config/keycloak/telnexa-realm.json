@@ -1,0 +1,45 @@
+{
+  "realm": "telnexa",
+  "enabled": true,
+  "displayName": "Telnexa",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": true,
+  "rememberMe": false,
+  "verifyEmail": true,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 28800,
+  "roles": {"realm": [
+    {"name":"OWNER"},{"name":"ADMIN"},{"name":"BILLING"},{"name":"DEVELOPER"},{"name":"SUPPORT"},{"name":"READ_ONLY"}
+  ]},
+  "clientScopes": [
+    {"name":"sms.send","protocol":"openid-connect"},
+    {"name":"sms.read","protocol":"openid-connect"},
+    {"name":"sms.bulk","protocol":"openid-connect"},
+    {"name":"sms.webhook","protocol":"openid-connect"},
+    {"name":"sms.number.read","protocol":"openid-connect"},
+    {"name":"billing.read","protocol":"openid-connect"},
+    {"name":"api-audience","protocol":"openid-connect","protocolMappers":[
+      {"name":"telnexa-api-audience","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper","config":{"included.custom.audience":"telnexa-api","access.token.claim":"true"}}
+    ]},
+    {"name":"tenant-bindings","protocol":"openid-connect","protocolMappers":[
+      {"name":"tenant_id","protocol":"openid-connect","protocolMapper":"oidc-usermodel-attribute-mapper","config":{"user.attribute":"tenant_id","claim.name":"tenant_id","jsonType.label":"String","access.token.claim":"true","id.token.claim":"true"}},
+      {"name":"account_id","protocol":"openid-connect","protocolMapper":"oidc-usermodel-attribute-mapper","config":{"user.attribute":"account_id","claim.name":"account_id","jsonType.label":"String","access.token.claim":"true","id.token.claim":"true"}}
+    ]}
+  ],
+  "clients": [{
+    "clientId":"telnexa-portal","name":"Telnexa Portal","enabled":true,"publicClient":true,
+    "standardFlowEnabled":true,"directAccessGrantsEnabled":false,"serviceAccountsEnabled":false,
+    "rootUrl":"https://api.telnexa.co","baseUrl":"/dashboard",
+    "redirectUris":["https://api.telnexa.co/*"],"webOrigins":["https://api.telnexa.co"],
+    "attributes":{"pkce.code.challenge.method":"S256"},
+    "protocolMappers":[{"name":"realm-roles","protocol":"openid-connect","protocolMapper":"oidc-usermodel-realm-role-mapper","config":{"claim.name":"realm_access.roles","jsonType.label":"String","multivalued":"true","access.token.claim":"true","id.token.claim":"true","userinfo.token.claim":"true","user.attribute":"foo"}}],
+    "defaultClientScopes":["web-origins","acr","profile","roles","email","tenant-bindings","api-audience"]
+  },{
+    "clientId":"telnexa-api","name":"Telnexa API","enabled":true,"bearerOnly":true
+  }]
+}

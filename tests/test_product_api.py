@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 os.environ["BILLING_DATABASE_URL"]="sqlite:////tmp/telnexa-product-tests.db"
 os.environ["BILLING_ADMIN_TOKEN"]="test-admin-token"
+os.environ["BILLING_JWT_SECRET"]="test-only-webhook-encryption-key-32-bytes-minimum"
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import close_all_sessions
 from billing.app import app,ph
@@ -32,7 +33,7 @@ def test_marketing_suppression_and_sender_approval():
     db.query(Contact).delete();db.add(Contact(tenant_id=t.id,phone="+491234567",consent_status="opted_in",consent_source="contract"));db.add(Sender(tenant_id=t.id,sender="Telnexa",status="requested"));db.commit();assert c.post("/api/v1/messages",headers=h,json=body).json()["detail"]=="sender_not_approved"
 
 def test_simulator_mo_stop_help_and_deduplication():
-    db,t,a,key=seed();c=TestClient(app);h={"X-Simulator-Token":"test-admin-token"};body={"tenant_id":t.id,"provider_message_id":"mo-1","sender":"+491234567","destination":"+498765432","content":"STOP"};r=c.post("/api/v1/simulator/mo",headers=h,json=body);assert r.status_code==202 and r.json()["event"]=="sms.opted_out";assert c.post("/api/v1/simulator/mo",headers=h,json=body).json()["duplicate"] is True
+    db,t,a,key=seed();c=TestClient(app);h={"X-Simulator-Token":"test-admin-token"};body={"tenant_id":t.id,"provider_message_id":"mo-1","sender":"+491234567","destination":"+498765432","content":"STOPALL"};r=c.post("/api/v1/simulator/mo",headers=h,json=body);assert r.status_code==202 and r.json()["event"]=="sms.opted_out";assert c.post("/api/v1/simulator/mo",headers=h,json=body).json()["duplicate"] is True
     body.update(provider_message_id="mo-2",content="HELP");assert c.post("/api/v1/simulator/mo",headers=h,json=body).json()["event"]=="sms.help_requested"
 
 def test_dlr_timeline_is_tenant_scoped_and_idempotent():
@@ -42,7 +43,7 @@ def test_failover_preview_ignores_open_circuit():
     db,t,a,key=seed();p1=Provider(name="Primary",connector="sim-primary",state="enabled",health_score=10,circuit_state="open");p2=Provider(name="Simulator backup",connector="simulator",state="enabled",health_score=95,circuit_state="closed");db.add_all([p1,p2]);db.flush();db.add_all([Route(country="DE",prefix="+49",provider_id=p1.id,priority=10,enabled=True),Route(country="DE",prefix="+49",provider_id=p2.id,priority=5,enabled=True)]);db.commit();c=TestClient(app);r=c.get("/api/v1/admin/routes/preview?destination=%2B49123",headers={"X-Admin-Token":"test-admin-token"});assert r.json()["selected"]["provider"]=="Simulator backup" and r.json()["dry_run"] is True
 
 def test_webhook_secret_is_displayed_once():
-    db,t,a,key=seed();c=TestClient(app);r=c.post("/api/v1/webhooks",headers=headers(t,key),json={"url":"https://example.test/hook","events":["sms.delivered"]});assert r.status_code==201 and r.json()["secret"].startswith("whsec_");assert db.query(Webhook).one().secret_ciphertext=="external-kms-required"
+    db,t,a,key=seed();c=TestClient(app);r=c.post("/api/v1/webhooks",headers=headers(t,key),json={"url":"https://example.com/hook","events":["sms.delivered"]});assert r.status_code==201 and r.json()["secret"].startswith("whsec_");assert db.query(Webhook).one().secret_ciphertext.startswith("gAAAA")
 
 def test_login_secure_session_logout_and_rate_limit():
     db,t,a,key=seed();db.add(TeamMember(tenant_id=t.id,email="user@example.com",display_name="User",role="tenant_admin",password_hash=ph.hash("a-strong-password"),status="active",email_verified=True));db.commit();c=TestClient(app,base_url="https://testserver")

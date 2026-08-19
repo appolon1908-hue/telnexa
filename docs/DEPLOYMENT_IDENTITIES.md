@@ -38,4 +38,8 @@ Host klyrow-server
     IdentitiesOnly yes
 ```
 
-Do not copy private keys to the application server. The middleware alias and negative authentication tests remain a middleware-side launch gate because SSH to `10.40.0.1:22` timed out during this execution.
+Do not copy private keys to the application server. The server audit log confirms fresh
+successful sessions for all three expected users with their matching dedicated
+fingerprints. The four mismatched-key authentication attempts remain a middleware-side
+launch gate because only middleware holds the private keys. Run them with
+`BatchMode=yes` and `IdentitiesOnly=yes`; every mismatched attempt must exit nonzero.

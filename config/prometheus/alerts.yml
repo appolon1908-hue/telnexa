@@ -1,0 +1,22 @@
+groups:
+  - name: telnexa-production
+    rules:
+      - alert: TelnexaApiDown
+        expr: up{job="billing-api"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations: {summary: "Telnexa API is unavailable"}
+      - alert: TelnexaNodeExporterDown
+        expr: up{job="node"} == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "Telnexa host telemetry is unavailable"}
+      - alert: TelnexaApiSendFailures
+        expr: increase(telnexa_billing_sends_total{status="rejected"}[5m]) > 10
+        labels: {severity: warning}
+        annotations: {summary: "Telnexa rejected more than ten sends in five minutes"}
+      - alert: TelnexaDiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.15
+        for: 10m
+        labels: {severity: critical}
+        annotations: {summary: "Telnexa root filesystem has less than 15% free"}
