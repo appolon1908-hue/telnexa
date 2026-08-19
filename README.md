@@ -2,6 +2,8 @@
 
 Production-oriented Docker Compose deployment for `telnexa.co`. It provides Jasmin's HTTP/SMPP gateway, Redis, RabbitMQ, an HTTPS reverse proxy, signed webhook relay, host monitoring, health checks, persistence, and operator tooling. No carrier credentials or real routes are included.
 
+The repository also contains an additive multi-tenant billing control plane: private PostgreSQL, decimal wallets, immutable ledger enforcement, atomic reservations, deterministic rate snapshots, simulator-safe charging, usage/margin data, invoice/payment foundations, tenant APIs, portal shells, signed middleware event outbox, migrations and billing backup/restore. See [billing architecture](docs/BILLING_ARCHITECTURE.md). Production SMS remains disabled until real provider credentials and an explicitly authorized destination are supplied.
+
 ## Architecture
 
 ```text
