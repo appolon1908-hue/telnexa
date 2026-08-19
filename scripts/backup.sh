@@ -8,6 +8,7 @@ mkdir -p "$dest"
 tar -czf "$dest/repository-config.tar.gz" --exclude=.git --exclude=backups --exclude='*.log' \
   docker-compose.yml .env config docker docs examples scripts README.md DEPLOYMENT_REPORT.md
 "${COMPOSE[@]}" exec -T redis sh -c 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" SAVE' >/dev/null
+"${COMPOSE[@]}" exec -T billing-db sh -c 'pg_dump --format=custom --no-owner --username="$POSTGRES_USER" "$POSTGRES_DB"' > "$dest/billing.pgdump"
 jasmin_volume=$("${COMPOSE[@]}" config --volumes | grep 'jasmin-config')
 redis_volume=$("${COMPOSE[@]}" config --volumes | grep 'redis-data')
 for volume in "$jasmin_volume" "$redis_volume"; do

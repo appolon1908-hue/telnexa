@@ -3,7 +3,7 @@ log_format telnexa_noargs '$remote_addr [$time_local] "$request_method $uri $ser
 
 server {
     listen 80 default_server;
-    server_name ${SMS_DOMAIN} ${API_DOMAIN};
+    server_name ${SMS_DOMAIN} ${API_DOMAIN} ${PORTAL_DOMAIN} ${ADMIN_DOMAIN};
     location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
     location / { return 301 https://$host$request_uri; }
 }
@@ -47,6 +47,14 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/${SMS_DOMAIN}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     add_header Strict-Transport-Security "max-age=31536000" always;
-    location = /healthz { default_type application/json; return 200 '{"status":"reserved","service":"future middleware API"}'; }
-    location / { default_type application/json; return 503 '{"status":"reserved","service":"future middleware API"}'; }
+    location = /healthz { proxy_pass http://billing-api:8000/health; }
+    location / { limit_req zone=sms_api burst=40 nodelay; proxy_pass http://billing-api:8000; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto https; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; client_max_body_size 1m; }
+}
+
+server {
+    listen 443 ssl; http2 on; server_name ${PORTAL_DOMAIN} ${ADMIN_DOMAIN}; server_tokens off;
+    ssl_certificate /etc/letsencrypt/live/${SMS_DOMAIN}/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/${SMS_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3; add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosn always; add_header X-Frame-Options DENY always;
+    location / { proxy_pass http://billing-api:8000; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto https; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; }
 }
