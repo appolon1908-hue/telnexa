@@ -51,7 +51,7 @@ The supplied mission document is truncated at line 743 in the middle of §23 (cu
 - Carrier/provider credentials, approved routes, sender registrations, destination authorizations, throughput/bind limits and DLR/MO contracts were not supplied.
 - Public DNS and certificate authorization for `api.telnexa.co`, `app.telnexa.co`, `admin.telnexa.co` (and optional monitoring hostname) are not established by this mission context.
 - Middleware production credentials and final event-schema acceptance are unavailable. Default private endpoint is `10.40.0.1`; no Odoo database write was attempted.
-- Payment processor credentials/webhook signing secrets, tax/jurisdiction configuration, legal/compliance approval and invoice-number jurisdiction rules are unavailable.
+- Payment processor integration, tax/jurisdiction configuration, legal/compliance approval and invoice-number jurisdiction rules are unavailable.
 - SMTP/email provider credentials are unavailable, so verification/reset tokens have durable foundations but no production mail delivery.
 - KMS/secret-manager integration is unavailable; webhook secret plaintext is display-once and its production encrypted recovery/rotation path must use an approved KMS.
 - Public reverse-proxy cutover cannot be done safely without deciding how the existing `/opt/telnexa` stack and shared ingress should route the new private service.
