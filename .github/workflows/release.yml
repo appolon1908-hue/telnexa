@@ -61,12 +61,15 @@ jobs:
 
       - name: Generate release SBOM and checksums
         run: |
+          docker pull "${IMAGE}@${{ steps.build.outputs.digest }}"
+          docker save "${IMAGE}@${{ steps.build.outputs.digest }}" | \
+            zstd -T0 -10 -o image.tar.zst
           docker run --rm anchore/syft:v1.33.0 \
             "${IMAGE}@${{ steps.build.outputs.digest }}" \
             -o cyclonedx-json > sbom.cdx.json
           printf '%s\n' '${{ github.sha }}' > SOURCE_SHA
           printf '%s\n' '${{ steps.build.outputs.digest }}' > IMAGE_DIGEST
-          sha256sum SOURCE_SHA IMAGE_DIGEST sbom.cdx.json > SHA256SUMS
+          sha256sum SOURCE_SHA IMAGE_DIGEST sbom.cdx.json image.tar.zst > SHA256SUMS
 
       - name: Upload certification evidence
         uses: actions/upload-artifact@v4
@@ -78,4 +81,5 @@ jobs:
             SOURCE_SHA
             IMAGE_DIGEST
             sbom.cdx.json
+            image.tar.zst
             SHA256SUMS
