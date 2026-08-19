@@ -18,12 +18,12 @@ jobs:
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/telnexa-billing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Reject committed secrets
         run: |
           docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.28.0 \
-            git --redact --no-banner --source=/repo
+            git --redact --no-banner /repo
 
       - name: Run automated tests
         run: |
