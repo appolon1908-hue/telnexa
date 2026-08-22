@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Idempotently create the middleware Jasmin group/user and quotas."""
+
 import os
 import telnetlib
 
@@ -37,8 +38,14 @@ if api_user not in users:
     command("ok")
 command(f"user -u {api_user}", b"> ")
 command(f"password {api_password}", b"> ")
-command(f"mt_messaging_cred quota http_throughput {os.environ.get('JASMIN_HTTP_THROUGHPUT', '20')}", b"> ")
-command(f"mt_messaging_cred quota smpps_throughput {os.environ.get('JASMIN_SMPPS_THROUGHPUT', '20')}", b"> ")
+command(
+    f"mt_messaging_cred quota http_throughput {os.environ.get('JASMIN_HTTP_THROUGHPUT', '20')}",
+    b"> ",
+)
+command(
+    f"mt_messaging_cred quota smpps_throughput {os.environ.get('JASMIN_SMPPS_THROUGHPUT', '20')}",
+    b"> ",
+)
 command("ok")
 command("persist")
 session.write(b"quit\n")

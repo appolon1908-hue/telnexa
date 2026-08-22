@@ -39,7 +39,7 @@ Create the internal HTTP connector and MO route:
 ```text
 httpccm -a
 cid middleware_mo
-url http://webhook-relay:8080/events/inbound
+url http://webhook-relay:8080/events/inbound?source_key_id=jasmin-primary&source_token=PROTECTED_PROVIDER_SOURCE_TOKEN
 method POST
 ok
 morouter -a
@@ -68,7 +68,7 @@ Apply destination, group, user, and source-address filters before static routes 
 
 ## 4. Delivery receipts
 
-Outbound middleware requests should set `dlr=yes`, `dlr-level=2` (SMSC receipt) or `3` (submit plus SMSC receipt), `dlr-method=POST`, and `dlr-url=http://webhook-relay:8080/events/dlr`. The relay signs and forwards callbacks to `<WEBHOOK_TARGET_BASE_URL>/webhooks/sms/dlr`. Treat `UNDELIV`, `REJECTD`, `EXPIRED`, and equivalent terminal states as failed events in middleware; the relay also exposes `/events/failed` for normalized failure producers.
+Outbound middleware requests should set `dlr=yes`, `dlr-level=2` (SMSC receipt) or `3` (submit plus SMSC receipt), `dlr-method=POST`, and `dlr-url=http://webhook-relay:8080/events/dlr?source_key_id=jasmin-primary&source_token=PROTECTED_PROVIDER_SOURCE_TOKEN`. Read the token from the root-owned provider source-token file only while configuring Jasmin; never print it, commit it, or retain it in evidence. The relay strips the authentication fields, signs, and forwards callbacks to `<WEBHOOK_TARGET_BASE_URL>/webhooks/sms/dlr`. Treat `UNDELIV`, `REJECTD`, `EXPIRED`, and equivalent terminal states as failed events in middleware; the relay also exposes `/events/failed` for normalized failure producers.
 
 ## 5. Unicode, multipart, and sender rules
 

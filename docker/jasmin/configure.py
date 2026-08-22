@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Materialize Jasmin config from environment without logging secrets."""
+
 import hashlib
 import os
 import re
@@ -21,7 +22,11 @@ def patch_section(text, name, values):
     for key, value in values.items():
         pattern = rf"(?m)^#?{re.escape(key)}\s*=.*$"
         line = f"{key} = {value}"
-        block = re.sub(pattern, line, block, count=1) if re.search(pattern, block) else block + line + "\n"
+        block = (
+            re.sub(pattern, line, block, count=1)
+            if re.search(pattern, block)
+            else block + line + "\n"
+        )
     return text[: match.start()] + block + text[match.end() :]
 
 
@@ -45,13 +50,21 @@ for path in Path("/etc/jasmin").glob("*.cfg"):
     text = patch_section(text, "redis-client", redis)
     if path.name == "jasmin.cfg":
         admin_password = required("JASMIN_ADMIN_PASSWORD")
-        text = patch_section(text, "jcli", {
-            "bind": "0.0.0.0",
-            "authentication": "True",
-            "admin_username": os.environ.get("JASMIN_ADMIN_USER", "telnexa-admin"),
-            "admin_password": hashlib.md5(admin_password.encode()).hexdigest(),
-        })
-        text = patch_section(text, "http-api", {"bind": "0.0.0.0", "port": "1401", "log_privacy": "True"})
-        text = patch_section(text, "smpp-server", {"bind": "0.0.0.0", "port": "2775", "log_privacy": "True"})
+        text = patch_section(
+            text,
+            "jcli",
+            {
+                "bind": "0.0.0.0",
+                "authentication": "True",
+                "admin_username": os.environ.get("JASMIN_ADMIN_USER", "telnexa-admin"),
+                "admin_password": hashlib.md5(admin_password.encode()).hexdigest(),
+            },
+        )
+        text = patch_section(
+            text, "http-api", {"bind": "0.0.0.0", "port": "1401", "log_privacy": "True"}
+        )
+        text = patch_section(
+            text, "smpp-server", {"bind": "0.0.0.0", "port": "2775", "log_privacy": "True"}
+        )
     path.write_text(text)
     path.chmod(0o600)

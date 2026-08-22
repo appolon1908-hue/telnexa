@@ -1,0 +1,13 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# SQLAlchemy expression objects require ==/!= to build SQL predicates.
+"billing/*.py" = ["E711", "E712"]
+# Routers import after the FastAPI object is constructed to avoid cycles.
+"billing/app.py" = ["E402"]

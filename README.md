@@ -65,7 +65,7 @@ Certbot stores certificates in the `letsencrypt` volume. Renew with the same Cer
 
 Non-secret configuration is versioned under `config/` and `docker/`; deployment secrets live only in `.env`. The initial `middleware` Jasmin group/user is created idempotently at startup with HTTP/SMPP throughput quotas. Retrieve its username/password from `.env` and place them in the middleware's secret manager.
 
-After TLS, outbound middleware requests use `https://sms.telnexa.co/send`. Use URL/form parameters `username`, `password`, `to`, `from`, `content`, `coding`, `dlr`, `dlr-level`, `dlr-url`, and `dlr-method`. Use `coding=8` for Unicode. Request DLR callbacks through `http://webhook-relay:8080/events/dlr`; this URL is internal to Docker.
+After TLS, outbound middleware requests use `https://sms.telnexa.co/send`. Use URL/form parameters `username`, `password`, `to`, `from`, `content`, `coding`, `dlr`, `dlr-level`, `dlr-url`, and `dlr-method`. Use `coding=8` for Unicode. The provider adapter must construct the internal DLR URL as `http://webhook-relay:8080/events/dlr?source_key_id=<active-key-id>&source_token=<secret-reference-value>` from its protected provider credential; never persist or log the expanded URL. The relay removes these authentication fields before normalizing the event.
 
 Provider onboarding: [docs/ADDING_SMPP_PROVIDER.md](docs/ADDING_SMPP_PROVIDER.md). Customer onboarding: [docs/ADDING_SMS_CUSTOMER.md](docs/ADDING_SMS_CUSTOMER.md).
 
@@ -77,7 +77,7 @@ Set `WEBHOOK_TARGET_BASE_URL=https://middleware.example` and rotate `WEBHOOK_HMA
 - `<base>/webhooks/sms/dlr`
 - `<base>/webhooks/sms/failed`
 
-Headers are `X-Telnexa-Timestamp: <unix-seconds>` and `X-Telnexa-Signature: sha256=<hex>`. Verify `HMAC-SHA256(secret, timestamp + "." + raw_request_body)` with constant-time comparison, reject timestamps older than five minutes, and deduplicate message/event IDs. Example bodies are in `examples/webhook-payloads.json`. Relay logs deliberately omit query strings, bodies, and secrets.
+Headers include `X-Signature-Version: v1`, `X-Telnexa-Timestamp`, `X-Telnexa-Event-Id`, and `X-Telnexa-Signature: sha256=<hex>`. Verify HMAC-SHA256 over the newline-joined canonical fields `v1`, uppercase HTTP method, normalized path, timestamp, event ID, source `telnexa`, and SHA-256 of the exact request body. Use constant-time comparison, reject timestamps older than five minutes, and deduplicate event IDs. Example bodies are in `examples/webhook-payloads.json`. Relay logs deliberately omit query strings, bodies, and secrets.
 
 ## Operations
 
