@@ -24,9 +24,7 @@ class SignatureTest(unittest.TestCase):
         )
         self.assertEqual(
             value,
-            relay.make_signature(
-                secret, "POST", "/webhooks/sms/dlr/", timestamp, "event-1", body
-            ),
+            relay.make_signature(secret, "POST", "/webhooks/sms/dlr/", timestamp, "event-1", body),
         )
         for changed in (
             ("PUT", "/webhooks/sms/dlr", timestamp, "event-1", body),
@@ -61,9 +59,7 @@ class SignatureTest(unittest.TestCase):
             self.assertTrue(relay.authenticated_source({}, values))
             self.assertEqual(values, {"id": "message-1"})
             self.assertFalse(
-                relay.authenticated_source(
-                    {}, {"source_key_id": "jasmin", "source_token": "wrong"}
-                )
+                relay.authenticated_source({}, {"source_key_id": "jasmin", "source_token": "wrong"})
             )
 
 

@@ -9,7 +9,22 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import close_all_sessions
 from billing.app import app, ph
 from billing.db import Base, engine, SessionLocal
-from billing.models import *
+from billing.models import (
+    ApiKey,
+    AuthToken,
+    BillingAccount,
+    Contact,
+    Message,
+    PricingPlan,
+    Provider,
+    Rate,
+    Route,
+    Sender,
+    TeamMember,
+    Tenant,
+    Wallet,
+    Webhook,
+)
 import pytest
 
 
@@ -40,9 +55,7 @@ def seed(scopes="admin"):
         )
     )
     raw = "tnx_" + "a" * 32
-    db.add(
-        ApiKey(tenant_id=t.id, prefix=raw[:12], secret_hash=ph.hash(raw), scopes=scopes)
-    )
+    db.add(ApiKey(tenant_id=t.id, prefix=raw[:12], secret_hash=ph.hash(raw), scopes=scopes))
     now = datetime.now(timezone.utc)
     db.add_all(
         [
@@ -97,9 +110,7 @@ def test_contact_consent_sender_and_campaign_guardrails():
         ).status_code
         == 201
     )
-    sender = c.post(
-        "/api/v1/senders", headers=h, json={"sender": "Telnexa", "countries": ["DE"]}
-    )
+    sender = c.post("/api/v1/senders", headers=h, json={"sender": "Telnexa", "countries": ["DE"]})
     assert sender.json()["carrier_approved"] is False
     campaign = c.post(
         "/api/v1/campaigns",
@@ -145,8 +156,7 @@ def test_marketing_suppression_and_sender_approval():
     db.add(Sender(tenant_id=t.id, sender="Telnexa", status="requested"))
     db.commit()
     assert (
-        c.post("/api/v1/messages", headers=h, json=body).json()["detail"]
-        == "sender_not_approved"
+        c.post("/api/v1/messages", headers=h, json=body).json()["detail"] == "sender_not_approved"
     )
 
 
@@ -162,16 +172,13 @@ def test_missing_sender_and_changed_idempotency_payload_are_denied():
         "category": "transactional",
     }
     assert (
-        c.post("/api/v1/messages", headers=h, json=body).json()["detail"]
-        == "sender_not_approved"
+        c.post("/api/v1/messages", headers=h, json=body).json()["detail"] == "sender_not_approved"
     )
     db.add(Sender(tenant_id=t.id, sender="Telnexa", status="approved"))
     db.commit()
     assert c.post("/api/v1/messages", headers=h, json=body).status_code == 202
     assert (
-        c.post(
-            "/api/v1/messages", headers=h, json={**body, "content": "changed"}
-        ).status_code
+        c.post("/api/v1/messages", headers=h, json={**body, "content": "changed"}).status_code
         == 409
     )
 
@@ -189,13 +196,10 @@ def test_simulator_mo_stop_help_and_deduplication():
     }
     r = c.post("/api/v1/simulator/mo", headers=h, json=body)
     assert r.status_code == 202 and r.json()["event"] == "sms.opted_out"
-    assert (
-        c.post("/api/v1/simulator/mo", headers=h, json=body).json()["duplicate"] is True
-    )
+    assert c.post("/api/v1/simulator/mo", headers=h, json=body).json()["duplicate"] is True
     body.update(provider_message_id="mo-2", content="HELP")
     assert (
-        c.post("/api/v1/simulator/mo", headers=h, json=body).json()["event"]
-        == "sms.help_requested"
+        c.post("/api/v1/simulator/mo", headers=h, json=body).json()["event"] == "sms.help_requested"
     )
 
 
@@ -229,21 +233,10 @@ def test_dlr_timeline_is_tenant_scoped_and_idempotent():
         "external_event_id": "dlr-1",
         "status": "delivered",
     }
+    assert c.post("/api/v1/simulator/dlr", headers=h, json=body).json()["duplicate"] is False
+    assert c.post("/api/v1/simulator/dlr", headers=h, json=body).json()["duplicate"] is True
     assert (
-        c.post("/api/v1/simulator/dlr", headers=h, json=body).json()["duplicate"]
-        is False
-    )
-    assert (
-        c.post("/api/v1/simulator/dlr", headers=h, json=body).json()["duplicate"]
-        is True
-    )
-    assert (
-        len(
-            c.get(f"/api/v1/messages/{m.id}/events", headers=headers(t, key)).json()[
-                "items"
-            ]
-        )
-        == 1
+        len(c.get(f"/api/v1/messages/{m.id}/events", headers=headers(t, key)).json()["items"]) == 1
     )
 
 
@@ -267,12 +260,8 @@ def test_failover_preview_ignores_open_circuit():
     db.flush()
     db.add_all(
         [
-            Route(
-                country="DE", prefix="+49", provider_id=p1.id, priority=10, enabled=True
-            ),
-            Route(
-                country="DE", prefix="+49", provider_id=p2.id, priority=5, enabled=True
-            ),
+            Route(country="DE", prefix="+49", provider_id=p1.id, priority=10, enabled=True),
+            Route(country="DE", prefix="+49", provider_id=p2.id, priority=5, enabled=True),
         ]
     )
     db.commit()
@@ -281,10 +270,7 @@ def test_failover_preview_ignores_open_circuit():
         "/api/v1/admin/routes/preview?destination=%2B49123",
         headers={"X-Admin-Token": "test-admin-token"},
     )
-    assert (
-        r.json()["selected"]["provider"] == "Simulator backup"
-        and r.json()["dry_run"] is True
-    )
+    assert r.json()["selected"]["provider"] == "Simulator backup" and r.json()["dry_run"] is True
 
 
 def test_webhook_secret_is_displayed_once():

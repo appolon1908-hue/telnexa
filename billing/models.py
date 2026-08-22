@@ -1,4 +1,4 @@
-import enum, uuid
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy import (
@@ -38,9 +38,7 @@ class PricingPlan(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     name: Mapped[str] = mapped_column(String(80), unique=True)
     billing_type: Mapped[str] = mapped_column(String(20), default="prepaid")
-    markup_percent: Mapped[Decimal] = mapped_column(
-        Numeric(18, 6), default=Decimal("0")
-    )
+    markup_percent: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=Decimal("0"))
     http_tps: Mapped[int] = mapped_column(Integer, default=1)
     smpp_tps: Mapped[int] = mapped_column(Integer, default=1)
     monthly_quota: Mapped[int] = mapped_column(Integer, default=1000)
@@ -52,15 +50,11 @@ class PricingPlan(Base):
 class BillingAccount(Base):
     __tablename__ = "billing_accounts"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    tenant_id: Mapped[str] = mapped_column(
-        ForeignKey("tenants.id"), unique=True, index=True
-    )
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), unique=True, index=True)
     currency: Mapped[str] = mapped_column(String(3), default="EUR")
     billing_type: Mapped[str] = mapped_column(String(20), default="prepaid")
     credit_limit: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=Decimal("0"))
-    low_balance_threshold: Mapped[Decimal] = mapped_column(
-        Numeric(18, 6), default=Decimal("10")
-    )
+    low_balance_threshold: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=Decimal("10"))
     frozen: Mapped[bool] = mapped_column(Boolean, default=False)
     tax_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
 
@@ -69,9 +63,7 @@ class Wallet(Base):
     __tablename__ = "wallets"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
-    billing_account_id: Mapped[str] = mapped_column(
-        ForeignKey("billing_accounts.id"), unique=True
-    )
+    billing_account_id: Mapped[str] = mapped_column(ForeignKey("billing_accounts.id"), unique=True)
     currency: Mapped[str] = mapped_column(String(3))
     available: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=Decimal("0"))
     reserved: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=Decimal("0"))
@@ -129,9 +121,7 @@ class Rate(Base):
     currency: Mapped[str] = mapped_column(String(3))
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 6))
     priority: Mapped[int] = mapped_column(Integer, default=0)
-    effective_from: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=now
-    )
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
 
@@ -480,9 +470,7 @@ class LoginAttempt(Base):
     identity_hash: Mapped[str] = mapped_column(String(64), index=True)
     ip_hash: Mapped[str] = mapped_column(String(64), index=True)
     succeeded: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=now, index=True
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
 class Organization(Base):

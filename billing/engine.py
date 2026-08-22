@@ -1,8 +1,9 @@
-import hashlib, math, uuid
+import hashlib
+import math
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from .models import (
     Wallet,
     BillingAccount,
@@ -86,9 +87,7 @@ def resolve_rate(db, kind, tenant, country, destination, plan_id=None, when=None
     return candidates[0]
 
 
-def credit(
-    db, account_id, amount, key, actor="system", reference="manual", correlation=None
-):
+def credit(db, account_id, amount, key, actor="system", reference="manual", correlation=None):
     acct = db.get(BillingAccount, account_id)
     wallet = db.scalar(
         select(Wallet).where(Wallet.billing_account_id == account_id).with_for_update()
@@ -176,15 +175,11 @@ def reserve(db, account_id, amount, key, message_id, correlation):
 
 
 def release(db, reservation_id, correlation, reason="submission_failed"):
-    r = db.scalar(
-        select(Reservation).where(Reservation.id == reservation_id).with_for_update()
-    )
+    r = db.scalar(select(Reservation).where(Reservation.id == reservation_id).with_for_update())
     if r.status != "active":
         return r
     wallet = db.scalar(
-        select(Wallet)
-        .where(Wallet.billing_account_id == r.billing_account_id)
-        .with_for_update()
+        select(Wallet).where(Wallet.billing_account_id == r.billing_account_id).with_for_update()
     )
     wallet.reserved -= r.amount
     wallet.available += r.amount
@@ -202,15 +197,11 @@ def release(db, reservation_id, correlation, reason="submission_failed"):
 
 
 def finalize(db, reservation_id, correlation):
-    r = db.scalar(
-        select(Reservation).where(Reservation.id == reservation_id).with_for_update()
-    )
+    r = db.scalar(select(Reservation).where(Reservation.id == reservation_id).with_for_update())
     if r.status != "active":
         return r
     wallet = db.scalar(
-        select(Wallet)
-        .where(Wallet.billing_account_id == r.billing_account_id)
-        .with_for_update()
+        select(Wallet).where(Wallet.billing_account_id == r.billing_account_id).with_for_update()
     )
     wallet.reserved -= r.amount
     r.status = "finalized"
@@ -253,9 +244,7 @@ def send_simulated(
 ):
     acct = db.get(BillingAccount, account_id)
     prior = db.scalar(
-        select(Message).where(
-            Message.tenant_id == acct.tenant_id, Message.idempotency_key == key
-        )
+        select(Message).where(Message.tenant_id == acct.tenant_id, Message.idempotency_key == key)
     )
     if prior:
         return prior
@@ -267,9 +256,7 @@ def send_simulated(
         tenant_id=acct.tenant_id,
         idempotency_key=key,
         request_hash=request_hash
-        or hashlib.sha256(
-            (destination + "\n" + sender + "\n" + content).encode()
-        ).hexdigest(),
+        or hashlib.sha256((destination + "\n" + sender + "\n" + content).encode()).hexdigest(),
         correlation_id=correlation,
         destination=destination,
         sender=sender,
@@ -286,9 +273,7 @@ def send_simulated(
     )
     db.add(msg)
     db.flush()
-    r = reserve(
-        db, account_id, msg.estimated_sell_amount, f"send:{key}", msg.id, correlation
-    )
+    r = reserve(db, account_id, msg.estimated_sell_amount, f"send:{key}", msg.id, correlation)
     msg.reservation_id = r.id
     if outcome in {"reject", "submission_failed"}:
         release(db, r.id, correlation, outcome)

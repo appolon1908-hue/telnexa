@@ -1,4 +1,7 @@
-import json, os, time, urllib.request
+import json
+import os
+import time
+import urllib.request
 import jwt
 from fastapi import HTTPException
 
@@ -33,9 +36,7 @@ def _jwks():
     return {key["kid"]: key for key in _cache["keys"]}
 
 
-def validate_bearer(
-    authorization: str | None, tenant_id: str | None, required: str = "read"
-):
+def validate_bearer(authorization: str | None, tenant_id: str | None, required: str = "read"):
     if not authorization or not authorization.startswith("Bearer "):
         return None
     token = authorization[7:]

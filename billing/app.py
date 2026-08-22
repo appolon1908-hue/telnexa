@@ -1,16 +1,33 @@
-import secrets, uuid, os, io, csv, hashlib, json, hmac
+import secrets
+import uuid
+import os
+import io
+import csv
+import hashlib
+import json
+import hmac
 from pathlib import Path
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from datetime import datetime, timezone
-from decimal import Decimal
-from fastapi import FastAPI, Depends, Header, HTTPException, Request
+from fastapi import FastAPI, Depends, Header, HTTPException
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
 from .db import Base, engine, session
-from .models import *
+from .models import (
+    ApiKey,
+    Audit,
+    BillingAccount,
+    Contact,
+    Invoice,
+    LedgerEntry,
+    Message,
+    Sender,
+    Usage,
+    Wallet,
+)
 from .engine import send_simulated, credit
 from .schemas import SendRequest, CreditRequest
 from .oidc import validate_bearer
@@ -75,9 +92,7 @@ def authn(required="read"):
             "messages:write": {"messages:write", "sms.send"},
             "bulk:write": {"bulk:write", "sms.bulk"},
         }
-        if "admin" not in scopes and not scopes.intersection(
-            aliases.get(required, {required})
-        ):
+        if "admin" not in scopes and not scopes.intersection(aliases.get(required, {required})):
             raise HTTPException(403, "insufficient_scope")
         row.last_used_at = datetime.now(timezone.utc)
         db.commit()
@@ -116,8 +131,7 @@ def version():
         "name": "telnexa",
         "version": app.version,
         "source_sha": os.environ.get("SOURCE_SHA", "development"),
-        "simulator": os.environ.get("BILLING_SIMULATOR_ENABLED", "true").lower()
-        == "true",
+        "simulator": os.environ.get("BILLING_SIMULATOR_ENABLED", "true").lower() == "true",
     }
 
 
@@ -127,11 +141,7 @@ def metrics(authorization: str = Header(default="")):
         expected = Path(os.environ["TELNEXA_METRICS_TOKEN_FILE"]).read_text().strip()
     except (KeyError, OSError):
         raise HTTPException(404, "not_found")
-    supplied = (
-        authorization.removeprefix("Bearer ")
-        if authorization.startswith("Bearer ")
-        else ""
-    )
+    supplied = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
     if not expected or not hmac.compare_digest(supplied, expected):
         raise HTTPException(404, "not_found")
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
@@ -149,9 +159,7 @@ def send(
     if not account or account.tenant_id != tenant_id:
         raise HTTPException(404, "billing_account_not_found")
     request_hash = hashlib.sha256(
-        json.dumps(
-            body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-        ).encode()
+        json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     prior = db.scalar(
         select(Message).where(
@@ -177,18 +185,14 @@ def send(
         DUPES.inc()
         return message_json(prior)
     contact = db.scalar(
-        select(Contact).where(
-            Contact.tenant_id == tenant_id, Contact.phone == body.destination
-        )
+        select(Contact).where(Contact.tenant_id == tenant_id, Contact.phone == body.destination)
     )
     if body.category == "marketing" and (
         not contact or contact.consent_status != "opted_in" or contact.opted_out_at
     ):
         raise HTTPException(409, "marketing_consent_required_or_suppressed")
     sender = db.scalar(
-        select(Sender).where(
-            Sender.tenant_id == tenant_id, Sender.sender == body.sender
-        )
+        select(Sender).where(Sender.tenant_id == tenant_id, Sender.sender == body.sender)
     )
     if not sender or sender.status != "approved":
         raise HTTPException(409, "sender_not_approved")
@@ -287,22 +291,16 @@ def invoices(tenant_id: str = Depends(authn()), db: Session = Depends(session)):
     return {
         "items": [
             {"id": x.id, "number": x.number, "total": str(x.total), "status": x.status}
-            for x in db.scalars(
-                select(Invoice).where(Invoice.tenant_id == tenant_id)
-            ).all()
+            for x in db.scalars(select(Invoice).where(Invoice.tenant_id == tenant_id)).all()
         ]
     }
 
 
 @app.get("/api/v1/billing/invoices/{invoice_id}.pdf")
-def invoice_pdf(
-    invoice_id: str, tenant_id: str = Depends(authn()), db: Session = Depends(session)
-):
+def invoice_pdf(invoice_id: str, tenant_id: str = Depends(authn()), db: Session = Depends(session)):
     from reportlab.pdfgen import canvas
 
-    inv = db.scalar(
-        select(Invoice).where(Invoice.id == invoice_id, Invoice.tenant_id == tenant_id)
-    )
+    inv = db.scalar(select(Invoice).where(Invoice.id == invoice_id, Invoice.tenant_id == tenant_id))
     if not inv:
         raise HTTPException(404, "invoice_not_found")
     output = io.BytesIO()
@@ -310,9 +308,7 @@ def invoice_pdf(
     pdf.setTitle(inv.number)
     pdf.drawString(72, 780, "TELNEXA INVOICE")
     pdf.drawString(72, 750, f"Invoice: {inv.number}")
-    pdf.drawString(
-        72, 730, f"Period: {inv.period_start.date()} — {inv.period_end.date()}"
-    )
+    pdf.drawString(72, 730, f"Period: {inv.period_start.date()} — {inv.period_end.date()}")
     pdf.drawString(72, 710, f"Total: {inv.total} {inv.currency}")
     pdf.drawString(72, 690, f"Status: {inv.status}")
     pdf.showPage()
@@ -419,13 +415,9 @@ def admin_credit(
     idempotency_key: str = Header(...),
     db: Session = Depends(session),
 ):
-    if not secrets.compare_digest(
-        x_admin_token, os.environ.get("BILLING_ADMIN_TOKEN", "disabled")
-    ):
+    if not secrets.compare_digest(x_admin_token, os.environ.get("BILLING_ADMIN_TOKEN", "disabled")):
         raise HTTPException(403, "forbidden")
-    entry = credit(
-        db, body.billing_account_id, body.amount, idempotency_key, "admin", body.reason
-    )
+    entry = credit(db, body.billing_account_id, body.amount, idempotency_key, "admin", body.reason)
     db.add(
         Audit(
             tenant_id=entry.tenant_id,
@@ -441,17 +433,11 @@ def admin_credit(
 
 
 @app.post("/api/v1/admin/tenants/{tenant_id}/api-keys", status_code=201)
-def create_key(
-    tenant_id: str, x_admin_token: str = Header(...), db: Session = Depends(session)
-):
-    if not secrets.compare_digest(
-        x_admin_token, os.environ.get("BILLING_ADMIN_TOKEN", "disabled")
-    ):
+def create_key(tenant_id: str, x_admin_token: str = Header(...), db: Session = Depends(session)):
+    if not secrets.compare_digest(x_admin_token, os.environ.get("BILLING_ADMIN_TOKEN", "disabled")):
         raise HTTPException(403, "forbidden")
     raw = "tnx_" + secrets.token_urlsafe(32)
-    account = db.scalar(
-        select(BillingAccount).where(BillingAccount.tenant_id == tenant_id)
-    )
+    account = db.scalar(select(BillingAccount).where(BillingAccount.tenant_id == tenant_id))
     row = ApiKey(
         tenant_id=tenant_id,
         account_id=account.id if account else None,
@@ -475,12 +461,8 @@ def create_key(
 
 
 @app.delete("/api/v1/api-keys/{key_id}")
-def revoke_key(
-    key_id: str, tenant_id: str = Depends(authn()), db: Session = Depends(session)
-):
-    row = db.scalar(
-        select(ApiKey).where(ApiKey.id == key_id, ApiKey.tenant_id == tenant_id)
-    )
+def revoke_key(key_id: str, tenant_id: str = Depends(authn()), db: Session = Depends(session)):
+    row = db.scalar(select(ApiKey).where(ApiKey.id == key_id, ApiKey.tenant_id == tenant_id))
     if not row:
         raise HTTPException(404, "api_key_not_found")
     row.revoked = True
