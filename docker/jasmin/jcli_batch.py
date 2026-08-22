@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run newline-delimited jCli commands from stdin without printing credentials."""
+
 import os
 import sys
 import telnetlib

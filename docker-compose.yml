@@ -171,6 +171,8 @@ services:
       WEBHOOK_TARGET_BASE_URL: ${WEBHOOK_TARGET_BASE_URL:-}
       WEBHOOK_HMAC_SECRET: ${WEBHOOK_HMAC_SECRET:?set WEBHOOK_HMAC_SECRET in .env}
       WEBHOOK_TIMEOUT_SECONDS: ${WEBHOOK_TIMEOUT_SECONDS:-10}
+      TELNEXA_PROVIDER_KEYS_FILE: /run/secrets/telnexa_provider_keys
+    secrets: [telnexa_provider_keys]
     expose: ["8080"]
     networks: [backend, egress]
     healthcheck:
@@ -250,13 +252,10 @@ services:
       BILLING_SIMULATOR_ENABLED: ${BILLING_SIMULATOR_ENABLED:-true}
       OIDC_ISSUER: https://auth.codestra.co/realms/codestra
       OIDC_AUDIENCE: codestra-api
+      OIDC_ALLOWED_AZP: ${OIDC_ALLOWED_AZP:?set approved Codestra client identities}
       SOURCE_SHA: ${SOURCE_SHA:-uncommitted}
       LIVE_SMS_DELIVERY: "false"
       LIVE_EMAIL_DELIVERY: "false"
-      EXTERNAL_SMS_DELIVERY: "false"
-      EXTERNAL_EMAIL_DELIVERY: "false"
-      PRODUCTION_PROVIDER_ROUTING: "false"
-      MARKETING_DELIVERY: "false"
       LIVE_PSTN_DIALING: "false"
     depends_on: {billing-db: {condition: service_healthy}}
     networks: [billing]
@@ -266,11 +265,14 @@ services:
     image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
     restart: unless-stopped
     <<: *default-security
-    environment: *billing-environment
+    environment:
+      <<: *billing-environment
+      TELNEXA_METRICS_TOKEN_FILE: /run/secrets/telnexa_metrics_token
     entrypoint: ["/usr/local/bin/live-gate"]
     command: ["uvicorn", "billing.app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
     volumes:
       - ./scripts/live-gate.sh:/usr/local/bin/live-gate:ro
+    secrets: [telnexa_metrics_token]
     depends_on:
       billing-db: {condition: service_healthy}
       billing-migrate: {condition: service_completed_successfully}
@@ -328,6 +330,7 @@ services:
       - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./config/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
+    secrets: [telnexa_metrics_token]
     expose: ["9090"]
     networks: [monitoring, billing]
     healthcheck:
@@ -407,3 +410,5 @@ volumes:
 secrets:
   keycloak_admin_password: {file: ./.secrets/keycloak_admin_password}
   keycloak_db_password: {file: ./.secrets/keycloak_db_password}
+  telnexa_provider_keys: {file: '${TELNEXA_PROVIDER_KEYS_FILE:?set root-owned provider key registry path}'}
+  telnexa_metrics_token: {file: '${TELNEXA_METRICS_TOKEN_FILE:?set root-owned metrics token path}'}

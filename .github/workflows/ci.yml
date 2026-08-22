@@ -1,0 +1,67 @@
+name: Telnexa exact-head CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, "agent/**", "codex/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  quality-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: billing/requirements.txt
+      - name: Install exact test and quality dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r billing/requirements.txt ruff pip-audit
+      - name: Full format and lint gate
+        run: |
+          python -m ruff format --check billing tests
+          python -m ruff check billing tests docker scripts
+      - name: Full test suite
+        run: python -m pytest -q
+      - name: Dependency audit
+        run: python -m pip_audit -r billing/requirements.txt --progress-spinner off
+      - name: Compose contract
+        env:
+          RABBITMQ_USER: ci
+          RABBITMQ_PASSWORD: ci-placeholder
+          REDIS_PASSWORD: ci-placeholder
+          JASMIN_ADMIN_PASSWORD: ci-placeholder
+          JASMIN_API_PASSWORD: ci-placeholder
+          WEBHOOK_HMAC_SECRET: ci-placeholder
+          BILLING_DB_PASSWORD: ci-placeholder
+          BILLING_ADMIN_TOKEN: ci-placeholder
+          BILLING_JWT_SECRET: ci-placeholder-value-with-required-length
+          BILLING_MIDDLEWARE_API_KEY: ci-placeholder
+          BILLING_MIDDLEWARE_HMAC_SECRET: ci-placeholder
+          GRAFANA_ADMIN_PASSWORD: ci-placeholder
+          OIDC_ALLOWED_AZP: telnexa-ci
+          TELNEXA_METRICS_TOKEN_FILE: /tmp/ci-metrics-token
+          KEYCLOAK_ADMIN_PASSWORD_FILE: /tmp/ci-keycloak-admin
+          KEYCLOAK_DB_PASSWORD_FILE: /tmp/ci-keycloak-db
+          TELNEXA_PROVIDER_KEYS_FILE: /tmp/ci-provider-keys
+        run: docker compose config --quiet
+      - name: Non-root container build
+        run: |
+          docker build -f billing/Dockerfile -t telnexa-ci:${GITHUB_SHA} .
+          test "$(docker image inspect telnexa-ci:${GITHUB_SHA} --format '{{.Config.User}}')" != "root"
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Gitleaks tree and PR range
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
