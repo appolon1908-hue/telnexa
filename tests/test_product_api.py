@@ -183,6 +183,31 @@ def test_missing_sender_and_changed_idempotency_payload_are_denied():
     )
 
 
+def test_sender_registration_and_changed_payload_idempotency():
+    db, tenant, account, key = seed()
+    client = TestClient(app)
+    request_headers = {**headers(tenant, key), "Idempotency-Key": "same-key"}
+    body = {
+        "billing_account_id": account.id,
+        "destination": "+491234567",
+        "sender": "Telnexa",
+        "content": "first",
+    }
+    denied = client.post("/api/v1/messages", headers=request_headers, json=body)
+    assert denied.json()["detail"] == "sender_not_approved"
+    db.add(Sender(tenant_id=tenant.id, sender="Telnexa", status="approved"))
+    db.commit()
+    first = client.post("/api/v1/messages", headers=request_headers, json=body)
+    assert first.status_code == 202
+    assert (
+        client.post("/api/v1/messages", headers=request_headers, json=body).json() == first.json()
+    )
+    changed = {**body, "content": "changed"}
+    conflict = client.post("/api/v1/messages", headers=request_headers, json=changed)
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == "idempotency_key_payload_mismatch"
+
+
 def test_simulator_mo_stop_help_and_deduplication():
     db, t, a, key = seed()
     c = TestClient(app)
