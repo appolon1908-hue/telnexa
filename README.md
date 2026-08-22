@@ -77,7 +77,7 @@ Set `WEBHOOK_TARGET_BASE_URL=https://middleware.example` and rotate `WEBHOOK_HMA
 - `<base>/webhooks/sms/dlr`
 - `<base>/webhooks/sms/failed`
 
-Headers are `X-Telnexa-Timestamp: <unix-seconds>` and `X-Telnexa-Signature: sha256=<hex>`. Verify `HMAC-SHA256(secret, timestamp + "." + raw_request_body)` with constant-time comparison, reject timestamps older than five minutes, and deduplicate message/event IDs. Example bodies are in `examples/webhook-payloads.json`. Relay logs deliberately omit query strings, bodies, and secrets.
+Headers include `X-Signature-Version: v1`, `X-Telnexa-Timestamp`, `X-Telnexa-Event-Id`, and `X-Telnexa-Signature: sha256=<hex>`. Verify HMAC-SHA256 over the newline-joined canonical fields `v1`, uppercase HTTP method, normalized path, timestamp, event ID, source `telnexa`, and SHA-256 of the exact request body. Use constant-time comparison, reject timestamps older than five minutes, and deduplicate event IDs. Example bodies are in `examples/webhook-payloads.json`. Relay logs deliberately omit query strings, bodies, and secrets.
 
 ## Operations
 

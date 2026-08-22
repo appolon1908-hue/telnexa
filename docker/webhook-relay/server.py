@@ -77,9 +77,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path)
         if path.path == "/healthz":
             return self.send(200, {"status": "ok"})
-        return self.forward(
-            path, dict(urllib.parse.parse_qsl(path.query, keep_blank_values=True))
-        )
+        return self.forward(path, dict(urllib.parse.parse_qsl(path.query, keep_blank_values=True)))
 
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path)
@@ -113,9 +111,7 @@ class Handler(BaseHTTPRequestHandler):
         timestamp = str(int(time.time()))
         event_id = str(uuid.uuid4())
         target_path = f"/webhooks/sms/{event}"
-        signature = make_signature(
-            SECRET, "POST", target_path, timestamp, event_id, payload
-        )
+        signature = make_signature(SECRET, "POST", target_path, timestamp, event_id, payload)
         request = urllib.request.Request(
             f"{TARGET}/webhooks/sms/{event}",
             data=payload,
