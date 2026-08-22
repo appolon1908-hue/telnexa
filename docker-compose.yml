@@ -330,6 +330,7 @@ services:
       - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./config/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
+    secrets: [telnexa_metrics_token]
     expose: ["9090"]
     networks: [monitoring, billing]
     healthcheck:

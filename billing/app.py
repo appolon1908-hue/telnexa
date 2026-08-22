@@ -37,7 +37,7 @@ async def security(request, call_next):
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "same-origin",
-            "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'",
+            "Content-Security-Policy": "default-src 'self'; connect-src 'self' https://auth.codestra.co; style-src 'self' 'unsafe-inline'",
             "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
         }
     )
@@ -159,7 +159,20 @@ def send(
         )
     )
     if prior:
-        if prior.request_hash != request_hash:
+        legacy_hash = (
+            "legacy:"
+            + hashlib.md5(
+                (
+                    body.destination
+                    + "\n"
+                    + body.sender
+                    + "\n"
+                    + hashlib.sha256(body.content.encode()).hexdigest()
+                ).encode(),
+                usedforsecurity=False,
+            ).hexdigest()
+        )
+        if prior.request_hash not in (request_hash, legacy_hash):
             raise HTTPException(409, "idempotency_key_payload_mismatch")
         DUPES.inc()
         return message_json(prior)

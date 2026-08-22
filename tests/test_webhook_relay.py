@@ -1,7 +1,8 @@
 import hashlib
-import hmac
 import importlib.util
 import os
+import json
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -34,6 +35,36 @@ class SignatureTest(unittest.TestCase):
             ("POST", "/webhooks/sms/dlr", timestamp, "event-1", body + b" "),
         ):
             self.assertNotEqual(relay.make_signature(secret, *changed), value)
+
+    def test_jasmin_query_credential_is_verified_and_removed(self):
+        token = "synthetic-provider-token"
+        with tempfile.NamedTemporaryFile(mode="w") as registry:
+            json.dump(
+                {
+                    "keys": [
+                        {
+                            "id": "jasmin",
+                            "enabled": True,
+                            "sha256": hashlib.sha256(token.encode()).hexdigest(),
+                        }
+                    ]
+                },
+                registry,
+            )
+            registry.flush()
+            os.environ["TELNEXA_PROVIDER_KEYS_FILE"] = registry.name
+            values = {
+                "source_key_id": "jasmin",
+                "source_token": token,
+                "id": "message-1",
+            }
+            self.assertTrue(relay.authenticated_source({}, values))
+            self.assertEqual(values, {"id": "message-1"})
+            self.assertFalse(
+                relay.authenticated_source(
+                    {}, {"source_key_id": "jasmin", "source_token": "wrong"}
+                )
+            )
 
 
 if __name__ == "__main__":
