@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SECRET = os.environ["WEBHOOK_HMAC_SECRET"].encode()
@@ -16,8 +17,20 @@ TIMEOUT = float(os.environ.get("WEBHOOK_TIMEOUT_SECONDS", "10"))
 ALLOWED = {"inbound", "dlr", "failed"}
 
 
-def make_signature(secret, timestamp, payload):
-    return hmac.new(secret, timestamp.encode() + b"." + payload, hashlib.sha256).hexdigest()
+def make_signature(secret, method, path, timestamp, event_id, payload):
+    normalized_path="/"+"/".join(part for part in path.split("/") if part)
+    body_hash=hashlib.sha256(payload).hexdigest()
+    canonical="\n".join(("v1",method.upper(),normalized_path,timestamp,event_id,"telnexa",body_hash)).encode()
+    return hmac.new(secret,canonical,hashlib.sha256).hexdigest()
+
+
+def authenticated_source(headers):
+    path=os.environ.get("TELNEXA_PROVIDER_KEYS_FILE","")
+    try:records=json.loads(open(path,encoding="utf-8").read()).get("keys",[])
+    except (OSError,ValueError):return False
+    key_id=headers.get("X-Key-ID","");token=headers.get("X-Telnexa-Source-Token","");digest=hashlib.sha256(token.encode()).hexdigest()
+    matches=[row for row in records if row.get("id")==key_id and row.get("enabled") is True and isinstance(row.get("sha256"),str) and hmac.compare_digest(row["sha256"],digest)]
+    return bool(token) and len(matches)==1
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -56,15 +69,18 @@ class Handler(BaseHTTPRequestHandler):
         parts = path.path.strip("/").split("/")
         if len(parts) != 2 or parts[0] != "events" or parts[1] not in ALLOWED:
             return self.send(404, {"error": "not found"})
+        if not authenticated_source(self.headers):
+            return self.send(401, {"error": "provider source identity required"})
         event = parts[1]
         payload = json.dumps({"event": event, "received_at": int(time.time()), "data": values}, separators=(",", ":"), sort_keys=True).encode()
         if not TARGET:
             return self.send(503, {"error": "middleware target is not configured"})
         timestamp = str(int(time.time()))
-        signature = make_signature(SECRET, timestamp, payload)
+        event_id=str(uuid.uuid4());target_path=f"/webhooks/sms/{event}"
+        signature = make_signature(SECRET,"POST",target_path,timestamp,event_id,payload)
         request = urllib.request.Request(
             f"{TARGET}/webhooks/sms/{event}", data=payload, method="POST",
-            headers={"Content-Type": "application/json", "X-Telnexa-Timestamp": timestamp, "X-Telnexa-Signature": f"sha256={signature}"},
+            headers={"Content-Type":"application/json","X-Signature-Version":"v1","X-Telnexa-Timestamp":timestamp,"X-Telnexa-Event-Id":event_id,"X-Telnexa-Signature":f"sha256={signature}"},
         )
         try:
             with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
