@@ -32,6 +32,16 @@ def test_marketing_suppression_and_sender_approval():
     body={"billing_account_id":a.id,"destination":"+491234567","sender":"Telnexa","content":"offer","category":"marketing"};assert c.post("/api/v1/messages",headers=h,json=body).status_code==409
     db.query(Contact).delete();db.add(Contact(tenant_id=t.id,phone="+491234567",consent_status="opted_in",consent_source="contract"));db.add(Sender(tenant_id=t.id,sender="Telnexa",status="requested"));db.commit();assert c.post("/api/v1/messages",headers=h,json=body).json()["detail"]=="sender_not_approved"
 
+def test_sender_registration_and_changed_payload_idempotency():
+    db,t,a,key=seed();c=TestClient(app);h={**headers(t,key),"Idempotency-Key":"same-key"}
+    body={"billing_account_id":a.id,"destination":"+491234567","sender":"Telnexa","content":"first"}
+    assert c.post("/api/v1/messages",headers=h,json=body).json()["detail"]=="sender_not_registered"
+    db.add(Sender(tenant_id=t.id,sender="Telnexa",status="approved"));db.commit()
+    first=c.post("/api/v1/messages",headers=h,json=body);assert first.status_code==202
+    assert c.post("/api/v1/messages",headers=h,json=body).json()==first.json()
+    changed={**body,"content":"changed"};conflict=c.post("/api/v1/messages",headers=h,json=changed)
+    assert conflict.status_code==409 and conflict.json()["detail"]=="idempotency_key_payload_mismatch"
+
 def test_simulator_mo_stop_help_and_deduplication():
     db,t,a,key=seed();c=TestClient(app);h={"X-Simulator-Token":"test-admin-token"};body={"tenant_id":t.id,"provider_message_id":"mo-1","sender":"+491234567","destination":"+498765432","content":"STOPALL"};r=c.post("/api/v1/simulator/mo",headers=h,json=body);assert r.status_code==202 and r.json()["event"]=="sms.opted_out";assert c.post("/api/v1/simulator/mo",headers=h,json=body).json()["duplicate"] is True
     body.update(provider_message_id="mo-2",content="HELP");assert c.post("/api/v1/simulator/mo",headers=h,json=body).json()["event"]=="sms.help_requested"

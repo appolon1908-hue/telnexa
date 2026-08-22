@@ -1,4 +1,4 @@
-import secrets, uuid, os, io, csv
+import secrets, uuid, os, io, csv, hashlib, json
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from datetime import datetime, timezone
@@ -49,13 +49,17 @@ def metrics():return Response(generate_latest(),media_type=CONTENT_TYPE_LATEST)
 def send(body:SendRequest,idempotency_key:str=Header(...),x_correlation_id:str|None=Header(None),tenant_id:str=Depends(authn("messages:write")),db:Session=Depends(session)):
     account=db.get(BillingAccount,body.billing_account_id)
     if not account or account.tenant_id!=tenant_id:raise HTTPException(404,"billing_account_not_found")
+    request_hash=hashlib.sha256(json.dumps(body.model_dump(mode="json"),sort_keys=True,separators=(",",":")).encode()).hexdigest()
     prior=db.scalar(select(Message).where(Message.tenant_id==tenant_id,Message.idempotency_key==idempotency_key));
-    if prior:DUPES.inc();return message_json(prior)
+    if prior:
+        if not prior.request_hash or not secrets.compare_digest(prior.request_hash,request_hash):raise HTTPException(409,"idempotency_key_payload_mismatch")
+        DUPES.inc();return message_json(prior)
     contact=db.scalar(select(Contact).where(Contact.tenant_id==tenant_id,Contact.phone==body.destination))
     if body.category=="marketing" and (not contact or contact.consent_status!="opted_in" or contact.opted_out_at):raise HTTPException(409,"marketing_consent_required_or_suppressed")
     sender=db.scalar(select(Sender).where(Sender.tenant_id==tenant_id,Sender.sender==body.sender))
-    if sender and sender.status!="approved":raise HTTPException(409,"sender_not_approved")
-    try:msg=send_simulated(db,account.id,body.destination,body.sender,body.content,idempotency_key,x_correlation_id or str(uuid.uuid4()),body.simulator_outcome);db.commit();SENDS.labels(msg.status).inc();return message_json(msg)
+    if not sender:raise HTTPException(409,"sender_not_registered")
+    if sender.status!="approved":raise HTTPException(409,"sender_not_approved")
+    try:msg=send_simulated(db,account.id,body.destination,body.sender,body.content,idempotency_key,x_correlation_id or str(uuid.uuid4()),body.simulator_outcome,request_hash=request_hash);db.commit();SENDS.labels(msg.status).inc();return message_json(msg)
     except ValueError as e:db.rollback();SENDS.labels("rejected").inc();raise HTTPException(402,str(e))
 def message_json(m):return {"message_id":m.id,"status":m.status,"encoding":m.encoding,"characters":m.character_count,"segments":m.segments,"estimated_charge":str(m.estimated_sell_amount),"provider_message_id":m.provider_message_id,"simulated":m.provider=="simulator"}
 @app.get("/api/v1/messages")

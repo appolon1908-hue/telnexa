@@ -248,11 +248,15 @@ services:
       BILLING_MIDDLEWARE_API_KEY: ${BILLING_MIDDLEWARE_API_KEY:?set BILLING_MIDDLEWARE_API_KEY in .env}
       BILLING_MIDDLEWARE_HMAC_SECRET: ${BILLING_MIDDLEWARE_HMAC_SECRET:?set BILLING_MIDDLEWARE_HMAC_SECRET in .env}
       BILLING_SIMULATOR_ENABLED: ${BILLING_SIMULATOR_ENABLED:-true}
-      OIDC_ISSUER: https://api.telnexa.co/auth/realms/telnexa
-      OIDC_AUDIENCE: telnexa-api
+      OIDC_ISSUER: https://auth.codestra.co/realms/codestra
+      OIDC_AUDIENCE: codestra-api
       SOURCE_SHA: ${SOURCE_SHA:-uncommitted}
       LIVE_SMS_DELIVERY: "false"
       LIVE_EMAIL_DELIVERY: "false"
+      EXTERNAL_SMS_DELIVERY: "false"
+      EXTERNAL_EMAIL_DELIVERY: "false"
+      PRODUCTION_PROVIDER_ROUTING: "false"
+      MARKETING_DELIVERY: "false"
       LIVE_PSTN_DIALING: "false"
     depends_on: {billing-db: {condition: service_healthy}}
     networks: [billing]
