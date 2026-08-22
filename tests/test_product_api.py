@@ -199,11 +199,14 @@ def test_sender_registration_and_changed_payload_idempotency():
     db.commit()
     first = client.post("/api/v1/messages", headers=request_headers, json=body)
     assert first.status_code == 202
-    assert client.post("/api/v1/messages", headers=request_headers, json=body).json() == first.json()
+    assert (
+        client.post("/api/v1/messages", headers=request_headers, json=body).json() == first.json()
+    )
     changed = {**body, "content": "changed"}
     conflict = client.post("/api/v1/messages", headers=request_headers, json=changed)
     assert conflict.status_code == 409
     assert conflict.json()["detail"] == "idempotency_key_payload_mismatch"
+
 
 def test_simulator_mo_stop_help_and_deduplication():
     db, t, a, key = seed()
