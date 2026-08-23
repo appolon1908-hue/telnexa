@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize Jasmin callbacks and forward them with an HMAC signature."""
+"""Authenticate Jasmin callbacks and forward them to Telnexa's durable inbox."""
 
 import hashlib
 import hmac
@@ -9,11 +9,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
-SECRET = os.environ["WEBHOOK_HMAC_SECRET"].encode()
-TARGET = os.environ.get("WEBHOOK_TARGET_BASE_URL", "").rstrip("/")
+try:
+    SECRET = Path(os.environ["TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE"]).read_bytes().strip()
+except (KeyError, OSError):
+    SECRET = os.environ.get("WEBHOOK_HMAC_SECRET", "").encode()
+TARGET = os.environ.get("TELNEXA_PROVIDER_EVENT_URL", "").rstrip("/")
 TIMEOUT = float(os.environ.get("WEBHOOK_TIMEOUT_SECONDS", "10"))
 ALLOWED = {"inbound", "dlr", "failed"}
 
@@ -102,18 +105,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(401, {"error": "provider source identity required"})
         event = parts[1]
         payload = json.dumps(
-            {"event": event, "received_at": int(time.time()), "data": values},
+            {"event": event, "data": values},
             separators=(",", ":"),
             sort_keys=True,
         ).encode()
         if not TARGET:
             return self.send(503, {"error": "middleware target is not configured"})
         timestamp = str(int(time.time()))
-        event_id = str(uuid.uuid4())
-        target_path = f"/webhooks/sms/{event}"
+        event_id = hashlib.sha256(payload).hexdigest()
+        target_path = "/internal/v1/provider-events/jasmin"
         signature = make_signature(SECRET, "POST", target_path, timestamp, event_id, payload)
         request = urllib.request.Request(
-            f"{TARGET}/webhooks/sms/{event}",
+            f"{TARGET}{target_path}",
             data=payload,
             method="POST",
             headers={
@@ -122,6 +125,7 @@ class Handler(BaseHTTPRequestHandler):
                 "X-Telnexa-Timestamp": timestamp,
                 "X-Telnexa-Event-Id": event_id,
                 "X-Telnexa-Signature": f"sha256={signature}",
+                "X-Key-ID": os.environ.get("TELNEXA_RELAY_KEY_ID", "jasmin-relay"),
             },
         )
         try:
@@ -131,7 +135,7 @@ class Handler(BaseHTTPRequestHandler):
                     {"accepted": response.status < 300},
                 )
         except (urllib.error.URLError, TimeoutError):
-            return self.send(502, {"error": "middleware delivery failed"})
+            return self.send(502, {"error": "telnexa provider-event delivery failed"})
 
 
 if __name__ == "__main__":

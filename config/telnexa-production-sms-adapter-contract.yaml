@@ -1,0 +1,533 @@
+version: 1
+name: telnexa-production-sms-adapter
+status: planning-authority
+repository: appolon1908-hue/telnexa
+base_branch: main
+
+principles:
+  commercial_api_is_authority: true
+  raw_jasmin_is_transport_only: true
+  durable_accept_before_dispatch: true
+  tenant_resolution_is_authoritative: true
+  billing_before_provider_dispatch: true
+  ambiguous_submission_never_blind_failover: true
+  provider_callbacks_never_choose_tenant: true
+  customer_webhook_failure_never_retries_carrier_submission: true
+  secrets_not_in_database_or_git: true
+  simulator_separated_from_production: true
+
+network:
+  provider_host:
+    public_ip: 37.27.128.39
+    private_ip: 10.40.0.4
+  middleware_host:
+    public_ip: 65.109.65.169
+    private_ip: 10.40.0.1
+  voice_host:
+    private_ip: 10.40.0.2
+  public_expected_ports: [80, 443]
+  prohibited_public_ports:
+    - 5432
+    - 6379
+    - 5672
+    - 15672
+    - 1401
+    - 8990
+    - 2775
+    - 9090
+    - 9100
+    - 2375
+    - 2376
+
+services:
+  commercial_api:
+    role: authoritative HTTP product/API surface
+    public: true
+    canonical_host: api.telnexa.co
+  billing_db:
+    role: durable tenant/billing/message state
+    public: false
+  redis:
+    role: shared rate limit/cache/coordination
+    public: false
+  rabbitmq:
+    role: queue wakeup/event transport
+    public: false
+  jasmin:
+    role: SMS transport gateway only
+    public: false
+  webhook_relay:
+    role: provider callback authentication/normalization ingress
+    public: false
+  sms_dispatch_worker:
+    role: durable outbound dispatch + adapter invocation
+    public: false
+  sms_provider_event_worker:
+    role: DLR/MO/failure event processing
+    public: false
+  sms_reconciliation_worker:
+    role: ambiguous/provider/billing drift reconciliation
+    public: false
+
+identity:
+  canonical_issuer: https://auth.codestra.co/realms/codestra
+  middleware_scope: sms.send
+  customer_scopes:
+    - sms.read
+    - sms.send
+    - sms.bulk
+    - sms.webhook
+    - billing.read
+  rules:
+    - client_tenant_header_is_context_not_authority
+    - middleware_tenant_must_be_verified_by_trusted_identity_or_resolver
+    - exact_audience_required
+    - exact_authorized_party_required
+
+api:
+  public:
+    - method: POST
+      path: /api/v1/messages
+      auth: tenant_api_key_or_oidc
+      scope: sms.send
+      idempotency_required: true
+      async: true
+    - method: POST
+      path: /api/v1/messages/bulk
+      auth: tenant_api_key_or_oidc
+      scope: sms.bulk
+      idempotency_required: true
+      async: true
+      limits:
+        max_items: 1000
+    - method: GET
+      path: /api/v1/messages
+      auth: tenant_api_key_or_oidc
+      scope: sms.read
+    - method: GET
+      path: /api/v1/messages/{message_id}
+      auth: tenant_api_key_or_oidc
+      scope: sms.read
+    - method: GET
+      path: /api/v1/messages/{message_id}/events
+      auth: tenant_api_key_or_oidc
+      scope: sms.read
+  internal:
+    - method: POST
+      path: /internal/v1/provider-events/jasmin
+      auth: private_relay_identity_hmac
+      public: false
+      idempotency_key: source_plus_event_id
+    - method: GET
+      path: /internal/v1/adapter/health
+      auth: private_operator_or_service
+      public: false
+  admin:
+    - [GET, /api/v1/admin/providers]
+    - [GET, /api/v1/admin/providers/{provider_id}]
+    - [GET, /api/v1/admin/providers/{provider_id}/health]
+    - [POST, /api/v1/admin/providers/{provider_id}/probe]
+    - [POST, /api/v1/admin/providers/{provider_id}/circuit/open]
+    - [POST, /api/v1/admin/providers/{provider_id}/circuit/close]
+    - [GET, /api/v1/admin/routes/preview]
+    - [GET, /api/v1/admin/dispatch/jobs]
+    - [GET, /api/v1/admin/dispatch/jobs/{job_id}]
+    - [POST, /api/v1/admin/dispatch/jobs/{job_id}/retry]
+    - [POST, /api/v1/admin/dispatch/jobs/{job_id}/reconcile]
+    - [GET, /api/v1/admin/provider-events]
+    - [GET, /api/v1/admin/reconciliation]
+    - [POST, /api/v1/admin/reconciliation]
+    - [GET, /api/v1/admin/send-gates]
+    - [POST, /api/v1/admin/send-gates/{gate_id}/close]
+
+message_state_machine:
+  states:
+    - accepted
+    - queued
+    - dispatching
+    - submitted
+    - sent
+    - delivered
+    - retry_wait
+    - submission_unknown
+    - rejected
+    - failed
+    - expired
+    - undeliverable
+    - cancelled
+  terminal:
+    - delivered
+    - rejected
+    - failed
+    - expired
+    - undeliverable
+    - cancelled
+  rules:
+    delivered_cannot_downgrade: true
+    duplicate_events_no_duplicate_effect: true
+    out_of_order_events_preserved: true
+    ambiguous_requires_reconciliation: true
+
+provider_adapter:
+  interface:
+    methods:
+      - submit
+      - health
+      - normalize_dlr
+      - normalize_mo
+  first_adapter:
+    type: jasmin_http
+    network: private
+    credentials: secret_file_references
+    redirects: false
+    trust_environment_proxy: false
+  submission_outcomes:
+    - ACCEPTED
+    - DEFINITIVE_REJECT
+    - SAFE_RETRY
+    - AMBIGUOUS
+    - INTERNAL_ERROR
+  jasmin_mapping:
+    fields:
+      - username
+      - password
+      - to
+      - from
+      - content
+      - coding
+      - dlr
+      - dlr-level
+      - dlr-url
+      - dlr-method
+    unicode_coding: 8
+    dlr_url_secret_expansion: runtime_only
+
+routing:
+  inputs:
+    - tenant_id
+    - destination_prefix
+    - country
+    - network_if_available
+    - sender_type
+    - message_category
+    - country_policy
+    - provider_capabilities
+    - provider_state
+    - provider_health
+    - provider_circuit
+    - provider_tps
+    - provider_inflight
+    - tenant_route_policy
+    - provider_cost
+    - sell_rate
+    - minimum_margin
+    - route_priority
+    - route_weight
+    - route_version
+  failover:
+    definitive_safe_retry_only: true
+    after_provider_acceptance: false
+    after_provider_message_id: false
+    after_ambiguous_timeout: false
+
+billing:
+  acceptance:
+    reserve_sell_amount: true
+    freeze_sell_rate_snapshot: true
+    freeze_provider_rate_snapshot: true
+  definitive_pre_submit_failure:
+    release_reservation: true
+  provider_acceptance:
+    finalize_exactly_once: true
+    usage_exactly_once: true
+  dlr:
+    may_double_finalize: false
+  reconciliation:
+    immutable_adjustments_only: true
+
+compliance:
+  send_time_checks:
+    - tenant_active
+    - billing_account_active
+    - billing_not_frozen
+    - sender_approved
+    - country_policy
+    - sender_type_allowed
+    - marketing_consent
+    - suppression
+    - quiet_hours
+    - campaign_approval
+    - registration_metadata_where_required
+    - segment_limit
+    - production_send_gate
+  inbound_keywords:
+    stop: local_authoritative_opt_out
+    help: local_authoritative_help_event
+    start: policy_controlled_opt_in
+  middleware_outage_must_not_block_stop: true
+
+database:
+  reuse:
+    - messages
+    - message_events
+    - balance_reservations
+    - usage_records
+    - rates
+    - providers
+    - routes
+    - senders
+    - contacts
+    - consent_records
+    - audit_log
+    - billing_outbox
+  add:
+    sms_dispatch_jobs:
+      tenant_owned: true
+      unique: [message_id]
+      indexes:
+        - [state, available_at]
+        - [tenant_id, state]
+        - [selected_provider_id, state]
+        - [lease_expires_at]
+    sms_dispatch_attempts:
+      tenant_owned: true
+      immutable_attempt_history: true
+      unique:
+        - [job_id, attempt_number]
+    sms_route_decisions:
+      tenant_owned: true
+      immutable: true
+    sms_provider_event_inbox:
+      tenant_owned_after_resolution: true
+      unique:
+        - [source, event_id]
+    sms_provider_event_attempts:
+      tenant_owned_after_resolution: true
+    sms_provider_receipts:
+      tenant_owned: true
+      optional_if_message_events_sufficient: true
+    sms_reconciliation_cases:
+      tenant_owned: true
+    sms_production_canary_gates:
+      tenant_owned: false
+      durable_counts: true
+    provider_connector_configs:
+      tenant_owned: false
+      versioned: true
+      optional_if_provider_model_extended_cleanly: true
+  extend:
+    messages:
+      - route_decision_id
+      - dispatch_job_id
+      - submitted_at
+      - delivered_at
+      - terminal_at
+      - failure_code
+      - submission_certainty
+    providers:
+      - adapter_type
+      - credential_reference
+      - environment
+      - tps_limit
+      - max_inflight
+      - connect_timeout_ms
+      - request_timeout_ms
+      - capability_metadata
+      - last_success_at
+      - last_failure_at
+      - failure_streak
+  row_level_security:
+    required_for_all_new_tenant_tables: true
+
+provider_events:
+  ingress:
+    flow: jasmin_to_relay_to_telnexa_inbox
+    trust_provider_tenant_id: false
+    authenticate_before_persist: true
+    persist_before_ack: true
+  dlr:
+    normalized_states:
+      - submitted
+      - sent
+      - delivered
+      - failed
+      - expired
+      - undeliverable
+      - unknown
+    duplicate_financial_effect: false
+  mo:
+    tenant_resolution: assigned_inbound_number_or_route
+    persist_before_middleware: true
+
+integration_events:
+  middleware:
+    durable_outbox: true
+    event_types:
+      - sms.submitted
+      - sms.sent
+      - sms.delivered
+      - sms.failed
+      - sms.expired
+      - sms.undeliverable
+      - sms.inbound.received
+      - sms.opted_out
+      - sms.opted_in
+      - sms.help_requested
+    envelope_fields:
+      - event_id
+      - event_type
+      - source
+      - tenant_id
+      - message_id
+      - correlation_id
+      - occurred_at
+      - schema_version
+      - payload
+    signing:
+      hmac: true
+      timestamp: true
+      event_id: true
+      method_path_body_bound: true
+  customer_webhooks:
+    ssrf_protection: true
+    redirect_denial: true
+    retries: true
+    dead_letter: true
+    manual_resend_audited: true
+
+production_gates:
+  environment_default: false
+  flags:
+    - TELNEXA_PRODUCTION_SMS_ENABLED
+    - provider_routing_enabled
+  canary:
+    server_side_allowlist: true
+    durable_reservation: true
+    fields:
+      - allowed_tenant
+      - allowed_sender
+      - allowed_destinations
+      - max_submissions
+      - reserved_count
+      - claimed_count
+      - expires_at
+      - approval_reference
+  progression:
+    - SIMULATOR_ONLY
+    - PROVIDER_SANDBOX
+    - SINGLE_DESTINATION_CANARY
+    - TENANT_CANARY
+    - BOUNDED_PRODUCTION
+    - PRODUCTION
+
+workers:
+  sms_dispatch_worker:
+    non_root: true
+    public_ports: []
+    durable_leases: true
+    heartbeat: true
+  sms_provider_event_worker:
+    non_root: true
+    public_ports: []
+    durable_leases: true
+    heartbeat: true
+  sms_reconciliation_worker:
+    non_root: true
+    public_ports: []
+    heartbeat: true
+
+metrics:
+  - telnexa_sms_dispatch_jobs
+  - telnexa_sms_dispatch_oldest_seconds
+  - telnexa_sms_dispatch_attempts_total
+  - telnexa_sms_provider_submit_latency_seconds
+  - telnexa_sms_provider_circuit_state
+  - telnexa_sms_provider_health_score
+  - telnexa_sms_provider_inflight
+  - telnexa_sms_provider_throttle_total
+  - telnexa_sms_submission_unknown_total
+  - telnexa_sms_dlr_events_total
+  - telnexa_sms_dlr_lag_seconds
+  - telnexa_sms_mo_events_total
+  - telnexa_sms_unmatched_provider_events
+  - telnexa_sms_middleware_outbox
+  - telnexa_sms_customer_webhooks
+  - telnexa_sms_billing_reconciliation_drift
+  - telnexa_sms_canary_remaining
+
+security_tests:
+  - cross_tenant_message_access_denied
+  - tenant_spoof_denied
+  - wrong_issuer_denied
+  - wrong_audience_denied
+  - wrong_azp_denied
+  - wrong_scope_denied
+  - provider_event_replay_denied
+  - signature_method_tamper_denied
+  - signature_path_tamper_denied
+  - signature_body_tamper_denied
+  - webhook_ssrf_denied
+  - raw_jasmin_public_denied
+  - postgres_public_denied
+  - redis_public_denied
+  - rabbitmq_public_denied
+  - docker_api_public_denied
+  - credentials_absent_from_logs
+
+release_gates:
+  - migration_forward_pass
+  - migration_reapply_pass
+  - isolated_restore_pass
+  - unit_tests_pass
+  - fake_jasmin_e2e_pass
+  - security_tests_pass
+  - load_tests_pass
+  - secret_scan_pass
+  - dependency_scan_pass
+  - container_scan_pass
+  - immutable_release_pass
+  - restricted_operator_deploy_pass
+  - runtime_digest_match_pass
+
+success:
+  software_ready_status: TELNEXA_PRODUCTION_SMS_ADAPTER_SOFTWARE_READY_PROVIDER_GATED
+  production_status: TELNEXA_PRODUCTION_SMS_ADAPTER_CERTIFIED
+  required:
+    COMMERCIAL_API_DURABLE_ACCEPTANCE: PASS
+    SIMULATOR_SEPARATED_FROM_PRODUCTION: PASS
+    JASMIN_ADAPTER: PASS
+    JASMIN_CREDENTIAL_ISOLATION: PASS
+    ROUTE_ENGINE: PASS
+    PROVIDER_CIRCUIT_BREAKER: PASS
+    PROVIDER_TPS_ENFORCEMENT: PASS
+    SAFE_FAILOVER: PASS
+    AMBIGUOUS_SUBMISSION_HANDLING: PASS
+    DISPATCH_QUEUE: PASS
+    DISPATCH_WORKER_RECOVERY: PASS
+    DLR_INGEST: PASS
+    DLR_IDEMPOTENCY: PASS
+    DLR_OUT_OF_ORDER: PASS
+    MO_INGEST: PASS
+    STOP_HELP_COMPLIANCE: PASS
+    BILLING_RESERVATION: PASS
+    BILLING_FINALIZATION: PASS
+    BILLING_RELEASE: PASS
+    DUPLICATE_BILLING_EFFECTS: 0
+    MIDDLEWARE_EVENT_OUTBOX: PASS
+    MIDDLEWARE_RETRY_DLQ: PASS
+    CUSTOMER_WEBHOOKS: PASS
+    TENANT_ISOLATION: PASS
+    RLS: PASS
+    PROVIDER_EVENT_REPLAY: DENIED
+    DIRECT_MIDDLEWARE_TO_JASMIN: DENIED
+    RAW_JASMIN_PUBLIC: DENIED
+    POSTGRESQL_PUBLIC: DENIED
+    REDIS_PUBLIC: DENIED
+    RABBITMQ_PUBLIC: DENIED
+    PRODUCTION_CANARY_GATE: PASS
+    SECRET_SCAN: PASS
+    DEPENDENCY_SCAN: PASS
+    CONTAINER_SCAN: PASS
+    BACKUP: PASS
+    ISOLATED_RESTORE: PASS
+    ROLLBACK_READY: PASS

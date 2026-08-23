@@ -10,25 +10,33 @@ from pathlib import Path
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from datetime import datetime, timezone
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
-from .db import Base, engine, session
+from .db import Base, SessionLocal, engine, session
 from .models import (
     ApiKey,
     Audit,
     BillingAccount,
+    Campaign,
     Contact,
+    CountryPolicy,
     Invoice,
     LedgerEntry,
     Message,
+    Route,
     Sender,
+    Tenant,
     Usage,
     Wallet,
 )
-from .engine import send_simulated, credit
+from .engine import credit
+from .dispatch import accept_message
+from .provider_events import ingest, verify_signature
+from .production_gates import production_enabled, reserve_canary
+from .sms_metrics import CANARY_REMAINING, DISPATCH_JOBS, SUBMISSION_UNKNOWN, UNMATCHED_EVENTS
 from .schemas import SendRequest, CreditRequest
 from .oidc import validate_bearer
 
@@ -144,6 +152,37 @@ def metrics(authorization: str = Header(default="")):
     supplied = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
     if not expected or not hmac.compare_digest(supplied, expected):
         raise HTTPException(404, "not_found")
+    with SessionLocal() as db:
+        from .models import SmsDispatchJob, SmsProductionCanaryGate, SmsReconciliationCase
+
+        for state, count in db.execute(
+            select(SmsDispatchJob.state, func.count()).group_by(SmsDispatchJob.state)
+        ).all():
+            DISPATCH_JOBS.labels(state).set(count)
+        SUBMISSION_UNKNOWN.set(
+            db.scalar(
+                select(func.count())
+                .select_from(Message)
+                .where(Message.status == "submission_unknown")
+            )
+        )
+        UNMATCHED_EVENTS.set(
+            db.scalar(
+                select(func.count())
+                .select_from(SmsReconciliationCase)
+                .where(
+                    SmsReconciliationCase.case_type == "unmatched_provider_event",
+                    SmsReconciliationCase.state == "open",
+                )
+            )
+        )
+        remaining = sum(
+            max(0, g.max_submissions - g.reserved_count)
+            for g in db.scalars(
+                select(SmsProductionCanaryGate).where(SmsProductionCanaryGate.enabled == True)
+            ).all()
+        )
+        CANARY_REMAINING.set(remaining)
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -158,6 +197,9 @@ def send(
     account = db.get(BillingAccount, body.billing_account_id)
     if not account or account.tenant_id != tenant_id:
         raise HTTPException(404, "billing_account_not_found")
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant or tenant.status != "active":
+        raise HTTPException(403, "tenant_inactive")
     request_hash = hashlib.sha256(
         json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -196,16 +238,42 @@ def send(
     )
     if not sender or sender.status != "approved":
         raise HTTPException(409, "sender_not_approved")
+    if production_enabled():
+        route_countries = {
+            r.country
+            for r in db.scalars(select(Route).where(Route.enabled == True)).all()
+            if r.tenant_id in (None, tenant_id) and body.destination.startswith(r.prefix)
+        }
+        policy = db.scalar(
+            select(CountryPolicy).where(
+                CountryPolicy.country.in_(route_countries),
+                CountryPolicy.category == body.category,
+                CountryPolicy.enabled == True,
+            )
+        )
+        if not policy or (sender.countries and policy.country not in sender.countries):
+            raise HTTPException(403, "country_or_sender_policy_denied")
+        if body.campaign_id:
+            campaign = db.scalar(
+                select(Campaign).where(
+                    Campaign.id == body.campaign_id, Campaign.tenant_id == tenant_id
+                )
+            )
+            if not campaign or campaign.status != "approved":
+                raise HTTPException(403, "campaign_not_approved")
+        if not reserve_canary(db, tenant_id, body.sender, body.destination):
+            db.rollback()
+            raise HTTPException(403, "production_canary_gate_denied")
     try:
-        msg = send_simulated(
+        msg = accept_message(
             db,
             account.id,
             body.destination,
             body.sender,
             body.content,
+            body.category,
             idempotency_key,
             x_correlation_id or str(uuid.uuid4()),
-            body.simulator_outcome,
             request_hash=request_hash,
         )
         db.commit()
@@ -227,7 +295,45 @@ def message_json(m):
         "estimated_charge": str(m.estimated_sell_amount),
         "provider_message_id": m.provider_message_id,
         "simulated": m.provider == "simulator",
+        "correlation_id": m.correlation_id,
+        "route_state": "eligible" if m.status in {"accepted", "queued"} else m.status,
     }
+
+
+@app.post("/internal/v1/provider-events/jasmin", status_code=202)
+async def provider_event(
+    request: Request,
+    x_telnexa_timestamp: str = Header(...),
+    x_telnexa_event_id: str = Header(...),
+    x_telnexa_signature: str = Header(...),
+    x_key_id: str = Header(...),
+    db: Session = Depends(session),
+):
+    body = await request.body()
+    if len(body) > 1048576:
+        raise HTTPException(413, "provider_event_too_large")
+    try:
+        secret = Path(os.environ["TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE"]).read_bytes().strip()
+    except (KeyError, OSError):
+        raise HTTPException(503, "provider_event_identity_unavailable")
+    if not verify_signature(
+        secret,
+        "POST",
+        request.url.path,
+        x_telnexa_timestamp,
+        x_telnexa_event_id,
+        body,
+        x_telnexa_signature,
+    ):
+        raise HTTPException(401, "invalid_provider_event_signature")
+    try:
+        payload = json.loads(body)
+        row, duplicate = ingest(db, x_key_id, x_telnexa_event_id, body, payload)
+        db.commit()
+    except (ValueError, json.JSONDecodeError) as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc))
+    return {"event_id": row.event_id, "accepted": True, "duplicate": duplicate}
 
 
 @app.get("/api/v1/messages")
