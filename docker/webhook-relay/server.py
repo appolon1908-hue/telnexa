@@ -55,7 +55,7 @@ def authenticated_source(headers, values):
         and isinstance(row.get("sha256"), str)
         and hmac.compare_digest(row["sha256"], digest)
     ]
-    return bool(token) and len(matches) == 1
+    return key_id if token and len(matches) == 1 else None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -101,7 +101,8 @@ class Handler(BaseHTTPRequestHandler):
         parts = path.path.strip("/").split("/")
         if len(parts) != 2 or parts[0] != "events" or parts[1] not in ALLOWED:
             return self.send(404, {"error": "not found"})
-        if not authenticated_source(self.headers, values):
+        source_key_id = authenticated_source(self.headers, values)
+        if not source_key_id:
             return self.send(401, {"error": "provider source identity required"})
         event = parts[1]
         payload = json.dumps(
@@ -125,7 +126,8 @@ class Handler(BaseHTTPRequestHandler):
                 "X-Telnexa-Timestamp": timestamp,
                 "X-Telnexa-Event-Id": event_id,
                 "X-Telnexa-Signature": f"sha256={signature}",
-                "X-Key-ID": os.environ.get("TELNEXA_RELAY_KEY_ID", "jasmin-relay"),
+                # Preserve the authenticated provider identity for composite DLR correlation.
+                "X-Key-ID": source_key_id,
             },
         )
         try:

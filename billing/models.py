@@ -383,6 +383,7 @@ class Provider(Base):
     capabilities: Mapped[dict] = mapped_column(JSON, default=dict)
     adapter_type: Mapped[str] = mapped_column(String(40), default="simulator")
     credential_reference: Mapped[str | None] = mapped_column(String(255))
+    dlr_source_key_id: Mapped[str | None] = mapped_column(String(120), unique=True)
     environment: Mapped[str] = mapped_column(String(30), default="simulator")
     base_url: Mapped[str | None] = mapped_column(String(500))
     routing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -559,6 +560,7 @@ class SmsDispatchJob(Base):
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     selected_provider_id: Mapped[str | None] = mapped_column(String(36), index=True)
     route_decision_id: Mapped[str | None] = mapped_column(String(36))
+    canary_gate_id: Mapped[str | None] = mapped_column(String(36), index=True)
     last_error_class: Mapped[str | None] = mapped_column(String(80))
     last_error_code: Mapped[str | None] = mapped_column(String(120))
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -611,7 +613,7 @@ class SmsRouteDecision(Base):
 
 class SmsProviderEventInbox(Base):
     __tablename__ = "sms_provider_event_inbox"
-    __table_args__ = (UniqueConstraint("source", "event_id"),)
+    __table_args__ = (UniqueConstraint("source_key_id", "event_id"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     source: Mapped[str] = mapped_column(String(40))
     source_key_id: Mapped[str] = mapped_column(String(120))

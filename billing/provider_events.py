@@ -13,10 +13,12 @@ from .models import (
     InboundMessage,
     Message,
     PhoneNumber,
+    Provider,
     Route,
     SmsProviderEventAttempt,
     SmsProviderEventInbox,
     SmsReconciliationCase,
+    SmsRouteDecision,
     Webhook,
     WebhookDelivery,
 )
@@ -62,7 +64,8 @@ def verify_signature(secret, method, path, timestamp, event_id, body, supplied, 
 def ingest(db, source_key_id, event_id, body, payload):
     prior = db.scalar(
         select(SmsProviderEventInbox).where(
-            SmsProviderEventInbox.source == "jasmin", SmsProviderEventInbox.event_id == event_id
+            SmsProviderEventInbox.source_key_id == source_key_id,
+            SmsProviderEventInbox.event_id == event_id,
         )
     )
     if prior:
@@ -98,19 +101,32 @@ def ingest(db, source_key_id, event_id, body, payload):
 
 
 def _dlr(db, row, data):
-    message = db.scalar(
-        select(Message).where(Message.provider_message_id == row.provider_message_id)
-    )
-    if not message:
+    matches = db.scalars(
+        select(Message)
+        .join(SmsRouteDecision, SmsRouteDecision.id == Message.route_decision_id)
+        .join(Provider, Provider.id == SmsRouteDecision.selected_provider_id)
+        .where(
+            Message.provider_message_id == row.provider_message_id,
+            Provider.dlr_source_key_id == row.source_key_id,
+        )
+    ).all()
+    if len(matches) != 1:
         db.add(
             SmsReconciliationCase(
-                case_type="unmatched_provider_event",
+                case_type=(
+                    "ambiguous_provider_event" if len(matches) > 1 else "unmatched_provider_event"
+                ),
                 reference_id=row.id,
-                evidence={"provider_message_id": row.provider_message_id},
+                evidence={
+                    "provider_message_id": row.provider_message_id,
+                    "source_key_id": row.source_key_id,
+                    "match_count": len(matches),
+                },
             )
         )
         row.state = "quarantined"
         return
+    message = matches[0]
     row.message_id, row.tenant_id = message.id, message.tenant_id
     raw = str(data.get("message_status") or data.get("status") or "unknown").upper()
     status = {

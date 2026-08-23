@@ -90,6 +90,7 @@ def resolve_rate(
         and (
             kind != "provider"
             or (provider is None and connector is None)
+            or (r.provider is None and r.connector is None)
             or (r.provider and r.provider in {provider, connector})
             or (r.connector and r.connector == connector)
         )

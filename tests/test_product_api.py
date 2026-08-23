@@ -86,6 +86,7 @@ def seed(scopes="admin"):
         routing_enabled=True,
         adapter_type="jasmin_http",
         credential_reference="/run/secrets/jasmin_http",
+        dlr_source_key_id="jasmin-primary",
         health_score=1,
     )
     db.add(provider)

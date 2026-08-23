@@ -117,7 +117,13 @@ class JasminHttpAdapter:
             return SubmissionResult(
                 SubmissionOutcome.SAFE_RETRY, provider_code="connect_failed", retryable=True
             )
-        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError):
+        except (
+            httpx.ReadError,
+            httpx.ReadTimeout,
+            httpx.WriteError,
+            httpx.WriteTimeout,
+            httpx.RemoteProtocolError,
+        ):
             return SubmissionResult(
                 SubmissionOutcome.AMBIGUOUS, provider_code="submission_timeout", ambiguous=True
             )

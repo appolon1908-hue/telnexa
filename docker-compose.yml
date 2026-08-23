@@ -170,7 +170,6 @@ services:
     environment:
       TELNEXA_PROVIDER_EVENT_URL: http://billing-api:8000
       TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE: /run/secrets/provider_event_hmac
-      TELNEXA_RELAY_KEY_ID: jasmin-relay
       WEBHOOK_TIMEOUT_SECONDS: ${WEBHOOK_TIMEOUT_SECONDS:-10}
       TELNEXA_PROVIDER_KEYS_FILE: /run/secrets/telnexa_provider_keys
     secrets: [telnexa_provider_keys,provider_event_hmac]
@@ -253,7 +252,6 @@ services:
       TELNEXA_PRODUCTION_SMS_ENABLED: "false"
       TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE: /run/secrets/provider_event_hmac
       TELNEXA_DLR_RELAY_URL: http://webhook-relay:8080
-      TELNEXA_DLR_SOURCE_KEY_ID: jasmin-primary
       OIDC_ISSUER: https://auth.codestra.co/realms/codestra
       OIDC_AUDIENCE: codestra-api
       OIDC_ALLOWED_AZP: ${OIDC_ALLOWED_AZP:?set approved Codestra client identities}

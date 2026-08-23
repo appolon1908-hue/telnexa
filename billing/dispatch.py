@@ -6,6 +6,7 @@ from sqlalchemy import select
 from .adapters.base import NormalizedSubmission, SubmissionOutcome
 from .engine import event, finalize, money, release, reserve, segment_info
 from .provider_capacity import acquire_provider_capacity, release_provider_capacity
+from .production_gates import production_enabled, validate_reserved_canary
 from .models import (
     Audit,
     BillingAccount,
@@ -13,7 +14,6 @@ from .models import (
     SmsDispatchAttempt,
     SmsDispatchJob,
     SmsReconciliationCase,
-    SmsProductionCanaryGate,
     SmsRouteDecision,
     Provider,
     Route,
@@ -35,6 +35,7 @@ def accept_message(
     correlation,
     request_hash,
     actor="commercial-api",
+    canary_gate_id=None,
 ):
     account = db.get(BillingAccount, account_id)
     prior = db.scalar(
@@ -93,6 +94,7 @@ def accept_message(
         state="queued",
         selected_provider_id=authorized.provider.id,
         route_decision_id=decision.id,
+        canary_gate_id=canary_gate_id,
     )
     db.add(job)
     db.flush()
@@ -177,6 +179,28 @@ def process_job(db, job, adapter_factory):
         job.last_error_code = "route_rate_consensus_failed"
         return
     now = datetime.now(timezone.utc)
+    gate = None
+    if production_enabled():
+        gate = validate_reserved_canary(
+            db,
+            job.canary_gate_id,
+            message.tenant_id,
+            message.sender,
+            message.destination,
+            now,
+        )
+        if not gate:
+            release(db, message.reservation_id, message.correlation_id, "canary_gate_denied")
+            transition(
+                db,
+                message,
+                "rejected",
+                f"canary-denied:{job.id}",
+                evidence={"reason": "canary_gate_denied"},
+            )
+            job.state = "rejected"
+            job.last_error_code = "canary_gate_denied"
+            return
     if not acquire_provider_capacity(db, provider.id, now):
         transition(db, message, "retry_wait", f"throttle:{job.id}:{job.attempt_count + 1}")
         job.state = "retry_wait"
@@ -254,14 +278,7 @@ def process_job(db, job, adapter_factory):
             message.correlation_id,
             {"message_id": message.id},
         )
-        gate = db.scalar(
-            select(SmsProductionCanaryGate).where(
-                SmsProductionCanaryGate.enabled == True,
-                SmsProductionCanaryGate.allowed_tenant == message.tenant_id,
-                SmsProductionCanaryGate.allowed_sender == message.sender,
-            )
-        )
-        if gate and message.destination in gate.allowed_destinations:
+        if gate:
             gate.claimed_count += 1
             gate.updated_at = datetime.now(timezone.utc)
             if gate.claimed_count >= gate.max_submissions:

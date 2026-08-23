@@ -253,9 +253,12 @@ def send(
             )
             if not campaign or campaign.status != "approved":
                 raise HTTPException(403, "campaign_not_approved")
-        if not reserve_canary(db, tenant_id, body.sender, body.destination):
+        canary_gate = reserve_canary(db, tenant_id, body.sender, body.destination)
+        if not canary_gate:
             db.rollback()
             raise HTTPException(403, "production_canary_gate_denied")
+    else:
+        canary_gate = None
     try:
         msg = accept_message(
             db,
@@ -267,6 +270,7 @@ def send(
             idempotency_key,
             x_correlation_id or str(uuid.uuid4()),
             request_hash=request_hash,
+            canary_gate_id=canary_gate.id if canary_gate else None,
         )
         db.commit()
         SENDS.labels(msg.status).inc()

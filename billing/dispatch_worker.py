@@ -14,12 +14,14 @@ def adapter_for(provider):
     secret_root = os.environ.get("TELNEXA_PROVIDER_SECRET_ROOT", "/run/secrets").rstrip("/")
     if not prefix or not prefix.startswith(secret_root + "/") or ".." in prefix:
         raise AdapterConfigurationError("explicit_provider_credential_reference_required")
+    if not provider.dlr_source_key_id:
+        raise AdapterConfigurationError("explicit_provider_dlr_source_key_id_required")
     return JasminHttpAdapter(
         provider.base_url or "http://jasmin:1401",
         prefix + "_username",
         prefix + "_password",
         os.environ.get("TELNEXA_DLR_RELAY_URL", "http://webhook-relay:8080"),
-        os.environ.get("TELNEXA_DLR_SOURCE_KEY_ID", "jasmin-primary"),
+        provider.dlr_source_key_id,
         prefix + "_dlr_token",
         provider.connect_timeout_ms,
         provider.request_timeout_ms,

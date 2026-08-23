@@ -20,6 +20,8 @@ Acceptance selects one transport-eligible route by tenant specificity, longest d
 
 Never place provider credentials in PostgreSQL: `Provider.credential_reference` is a required file-prefix reference under `/run/secrets`. The Compose contract uses `/run/secrets/jasmin_http`, resolving exactly `jasmin_http_username`, `jasmin_http_password`, and `jasmin_http_dlr_token`. Worker startup and production readiness read all three files and report only boolean/readable status.
 
+Each enabled provider also requires a unique `Provider.dlr_source_key_id` matching its webhook-relay source registry entry. The relay preserves that authenticated key in the durable inbox, and DLR correlation requires both this provider identity and the provider-local message ID. Missing or ambiguous matches are quarantined for reconciliation.
+
 Provider capacity uses atomic PostgreSQL updates on shared `Provider.inflight_count`, `tps_window_started_at`, and `tps_window_count`; it does not use process-local counters. Capacity is released after the adapter call, while TPS consumption remains recorded for the one-second window.
 
 An adapter timeout after a request may have been written is `AMBIGUOUS`. The job and Message become `submission_unknown`, the billing reservation remains held, and an `ambiguous_submission` reconciliation case is created. No backup adapter is invoked. Only a proven pre-submit failure is eligible for bounded retry.
