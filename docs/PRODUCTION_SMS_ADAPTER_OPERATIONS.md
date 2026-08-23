@@ -14,11 +14,17 @@
 
 ## Safety and activation
 
-`TELNEXA_PRODUCTION_SMS_ENABLED=false` is hard-coded in the implementation Compose environment. The dispatch worker does not claim jobs while false. Enabling requires a reviewed release plus a durable, enabled, unexpired gate matching the exact tenant, sender, destination, and maximum submissions. Provider routing is separately disabled by default. Never place provider credentials in PostgreSQL: `Provider.credential_reference` is a file-prefix reference only, resolving the username, password, and DLR token under `/run/secrets`.
+`TELNEXA_PRODUCTION_SMS_ENABLED=false` is hard-coded in the implementation Compose environment. The dispatch worker does not claim jobs while false. Enabling requires a reviewed release plus a durable, enabled, unexpired gate matching the exact tenant, sender, destination, and maximum submissions. Provider routing is separately disabled by default.
+
+Acceptance selects one transport-eligible route by tenant specificity, longest destination prefix, priority, provider health, and stable ID. Sender authorization, country policy, capabilities, provider rate, sell-plan rate, network, margin, and route version are then validated against that same route and frozen into one immutable route decision. A denied policy or missing rate on the selected route cannot borrow authorization or pricing from a fallback route.
+
+Never place provider credentials in PostgreSQL: `Provider.credential_reference` is a required file-prefix reference under `/run/secrets`. The Compose contract uses `/run/secrets/jasmin_http`, resolving exactly `jasmin_http_username`, `jasmin_http_password`, and `jasmin_http_dlr_token`. Worker startup and production readiness read all three files and report only boolean/readable status.
+
+Provider capacity uses atomic PostgreSQL updates on shared `Provider.inflight_count`, `tps_window_started_at`, and `tps_window_count`; it does not use process-local counters. Capacity is released after the adapter call, while TPS consumption remains recorded for the one-second window.
 
 An adapter timeout after a request may have been written is `AMBIGUOUS`. The job and Message become `submission_unknown`, the billing reservation remains held, and an `ambiguous_submission` reconciliation case is created. No backup adapter is invoked. Only a proven pre-submit failure is eligible for bounded retry.
 
-Jasmin callbacks flow through the relay to `/internal/v1/provider-events/jasmin`. The signature binds version, method, normalized path, timestamp, event ID, source, and exact body hash. The API persists before acknowledging. Tenant resolution is by provider-message mapping for DLR and assigned PhoneNumber for MO; provider tenant fields are ignored. STOP processing updates local suppression before asynchronous downstream notification.
+Jasmin callbacks flow through the relay to `/internal/v1/provider-events/jasmin`. The signature binds version, method, normalized path, timestamp, event ID, source, and exact body hash. The API persists before acknowledging. Tenant resolution is by provider-message mapping for DLR and assigned PhoneNumber for MO; provider tenant fields are ignored. STOP processing updates local suppression before asynchronous downstream notification. When the selected inbound-number country policy explicitly allows inbound re-opt-in, a newer START/UNSTOP first clears local suppression and appends one `opt_in` ConsentRecord, then emits `sms.opted_in`; duplicate or out-of-order events cannot duplicate or reverse the newer consent effect.
 
 ## Migration, rollback, and restore
 

@@ -57,3 +57,22 @@ def test_legacy_idempotency_hashes_are_explicitly_compatible():
     assert "legacy_hash = (" in source
     assert '"legacy:"' in source
     assert "prior.request_hash not in (request_hash, legacy_hash)" in source
+
+
+def test_internal_provider_inbox_and_raw_jasmin_are_not_public():
+    nginx = (ROOT / "docker/nginx/tls.conf.template").read_text()
+    assert "location ^~ /internal/" in nginx
+    assert "return 410" in nginx
+    assert "proxy_pass http://jasmin:1401" not in nginx
+
+
+def test_jasmin_secret_names_are_one_explicit_contract():
+    compose = (ROOT / "docker-compose.yml").read_text()
+    worker = (ROOT / "billing/dispatch_worker.py").read_text()
+    generator = (ROOT / "scripts/generate-env.sh").read_text()
+    for name in ("jasmin_http_username", "jasmin_http_password", "jasmin_http_dlr_token"):
+        assert name in compose
+    assert "provider.credential_reference" in worker
+    assert 'or "/run/secrets/jasmin"' not in worker
+    for name in ("jasmin-http-username", "jasmin-http-password", "jasmin-dlr-token"):
+        assert name in generator

@@ -9,9 +9,11 @@ from .engine import event
 from .models import (
     ConsentRecord,
     Contact,
+    CountryPolicy,
     InboundMessage,
     Message,
     PhoneNumber,
+    Route,
     SmsProviderEventAttempt,
     SmsProviderEventInbox,
     SmsReconciliationCase,
@@ -71,6 +73,15 @@ def ingest(db, source_key_id, event_id, body, payload):
     kind = {"dlr": "DLR", "failed": "FAILURE", "inbound": "MO"}.get(payload.get("event"))
     if not kind:
         raise ValueError("unsupported_provider_event")
+    occurred = data.get("occurred_at") or data.get("timestamp")
+    try:
+        occurred_at = (
+            datetime.fromisoformat(str(occurred).replace("Z", "+00:00"))
+            if occurred
+            else datetime.now(timezone.utc)
+        )
+    except ValueError:
+        occurred_at = datetime.now(timezone.utc)
     row = SmsProviderEventInbox(
         source="jasmin",
         source_key_id=source_key_id,
@@ -79,7 +90,7 @@ def ingest(db, source_key_id, event_id, body, payload):
         provider_message_id=data.get("id") or data.get("messageid"),
         payload_hash=hashlib.sha256(body).hexdigest(),
         normalized_payload=payload,
-        occurred_at=datetime.fromtimestamp(payload.get("received_at", time.time()), timezone.utc),
+        occurred_at=occurred_at,
     )
     db.add(row)
     db.flush()
@@ -173,27 +184,96 @@ def _mo(db, row, data):
     contact = db.scalar(
         select(Contact).where(Contact.tenant_id == number.tenant_id, Contact.phone == sender)
     )
+    latest_consent = db.scalar(
+        select(ConsentRecord)
+        .where(ConsentRecord.tenant_id == number.tenant_id, ConsentRecord.phone == sender)
+        .order_by(ConsentRecord.occurred_at.desc())
+        .limit(1)
+    )
+    event_time = row.occurred_at
+    latest_time = latest_consent.occurred_at if latest_consent else None
+    if event_time and event_time.tzinfo is None:
+        event_time = event_time.replace(tzinfo=timezone.utc)
+    if latest_time and latest_time.tzinfo is None:
+        latest_time = latest_time.replace(tzinfo=timezone.utc)
+    event_is_current = not latest_time or event_time >= latest_time
     if keyword in {"STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"}:
-        if not contact:
+        if not contact and event_is_current:
             contact = Contact(tenant_id=number.tenant_id, phone=sender)
             db.add(contact)
-        contact.consent_status = "opted_out"
-        contact.opted_out_at = datetime.now(timezone.utc)
-        contact.suppression_reason = "inbound_stop"
-        db.add(
-            ConsentRecord(
-                tenant_id=number.tenant_id,
-                phone=sender,
-                action="opt_out",
-                source="inbound_sms",
-                metadata_json={"event_id": row.event_id},
+        if event_is_current and contact and contact.consent_status != "opted_out":
+            contact.consent_status = "opted_out"
+            contact.opted_out_at = row.occurred_at
+            contact.suppression_reason = "inbound_stop"
+            db.add(
+                ConsentRecord(
+                    tenant_id=number.tenant_id,
+                    phone=sender,
+                    action="opt_out",
+                    source="inbound_sms",
+                    occurred_at=row.occurred_at,
+                    metadata_json={
+                        "event_id": row.event_id,
+                        "occurred_at": row.occurred_at.isoformat(),
+                    },
+                )
             )
-        )
-        event_type = "sms.opted_out"
+            event_type = "sms.opted_out"
     elif keyword == "HELP":
         event_type = "sms.help_requested"
     elif keyword in {"START", "UNSTOP"}:
-        event_type = "sms.opted_in"
+        routes = [
+            r
+            for r in db.scalars(select(Route).where(Route.enabled == True)).all()
+            if r.tenant_id in (None, number.tenant_id) and destination.startswith(r.prefix)
+        ]
+        routes.sort(
+            key=lambda r: (r.tenant_id == number.tenant_id, len(r.prefix), r.priority), reverse=True
+        )
+        policy = (
+            db.scalar(
+                select(CountryPolicy).where(
+                    CountryPolicy.country == routes[0].country,
+                    CountryPolicy.category == "marketing",
+                    CountryPolicy.enabled == True,
+                )
+            )
+            if routes
+            else None
+        )
+        allowed = bool(policy and policy.config.get("allow_inbound_reopt_in") is True)
+        if (
+            allowed
+            and event_is_current
+            and (
+                not contact
+                or contact.consent_status != "opted_in"
+                or contact.opted_out_at is not None
+            )
+        ):
+            if not contact:
+                contact = Contact(tenant_id=number.tenant_id, phone=sender)
+                db.add(contact)
+            contact.consent_status = "opted_in"
+            contact.consent_at = row.occurred_at
+            contact.consent_source = "inbound_sms"
+            contact.opted_out_at = None
+            contact.suppression_reason = None
+            db.add(
+                ConsentRecord(
+                    tenant_id=number.tenant_id,
+                    phone=sender,
+                    action="opt_in",
+                    source="inbound_sms",
+                    occurred_at=row.occurred_at,
+                    metadata_json={
+                        "event_id": row.event_id,
+                        "occurred_at": row.occurred_at.isoformat(),
+                        "keyword": keyword,
+                    },
+                )
+            )
+            event_type = "sms.opted_in"
     event(
         db,
         number.tenant_id,

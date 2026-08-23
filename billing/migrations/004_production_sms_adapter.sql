@@ -21,6 +21,9 @@ ALTER TABLE providers ADD COLUMN IF NOT EXISTS request_timeout_ms integer NOT NU
 ALTER TABLE providers ADD COLUMN IF NOT EXISTS last_success_at timestamptz;
 ALTER TABLE providers ADD COLUMN IF NOT EXISTS last_failure_at timestamptz;
 ALTER TABLE providers ADD COLUMN IF NOT EXISTS failure_streak integer NOT NULL DEFAULT 0;
+ALTER TABLE providers ADD COLUMN IF NOT EXISTS inflight_count integer NOT NULL DEFAULT 0;
+ALTER TABLE providers ADD COLUMN IF NOT EXISTS tps_window_started_at timestamptz;
+ALTER TABLE providers ADD COLUMN IF NOT EXISTS tps_window_count integer NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS sms_dispatch_jobs (
  id varchar(36) PRIMARY KEY, tenant_id varchar(36) NOT NULL, message_id varchar(36) NOT NULL UNIQUE,
@@ -48,10 +51,14 @@ CREATE INDEX IF NOT EXISTS ix_sms_dispatch_attempts_message ON sms_dispatch_atte
 CREATE TABLE IF NOT EXISTS sms_route_decisions (
  id varchar(36) PRIMARY KEY, message_id varchar(36) NOT NULL, tenant_id varchar(36) NOT NULL,
  destination_prefix varchar(32) NOT NULL, country varchar(2) NOT NULL, selected_provider_id varchar(36),
+ network varchar(20), sender_id varchar(36), country_policy_id varchar(36),
  selected_route_id varchar(36), route_version integer, candidate_summary json NOT NULL DEFAULT '[]',
  provider_rate_snapshot json NOT NULL DEFAULT '{}', sell_rate_snapshot json NOT NULL DEFAULT '{}',
  decision_hash varchar(64) NOT NULL UNIQUE, created_at timestamptz NOT NULL);
 CREATE INDEX IF NOT EXISTS ix_sms_route_decisions_tenant ON sms_route_decisions(tenant_id);
+ALTER TABLE sms_route_decisions ADD COLUMN IF NOT EXISTS network varchar(20);
+ALTER TABLE sms_route_decisions ADD COLUMN IF NOT EXISTS sender_id varchar(36);
+ALTER TABLE sms_route_decisions ADD COLUMN IF NOT EXISTS country_policy_id varchar(36);
 
 CREATE TABLE IF NOT EXISTS sms_provider_event_inbox (
  id varchar(36) PRIMARY KEY, source varchar(40) NOT NULL, source_key_id varchar(120) NOT NULL,

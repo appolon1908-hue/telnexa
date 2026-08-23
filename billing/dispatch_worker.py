@@ -3,13 +3,17 @@ import socket
 import time
 
 from .adapters import JasminHttpAdapter
+from .adapters.errors import AdapterConfigurationError
 from .db import SessionLocal
 from .dispatch import claim_job, process_job
 from .production_gates import production_enabled
 
 
 def adapter_for(provider):
-    prefix = provider.credential_reference or "/run/secrets/jasmin"
+    prefix = provider.credential_reference
+    secret_root = os.environ.get("TELNEXA_PROVIDER_SECRET_ROOT", "/run/secrets").rstrip("/")
+    if not prefix or not prefix.startswith(secret_root + "/") or ".." in prefix:
+        raise AdapterConfigurationError("explicit_provider_credential_reference_required")
     return JasminHttpAdapter(
         provider.base_url or "http://jasmin:1401",
         prefix + "_username",
@@ -20,6 +24,22 @@ def adapter_for(provider):
         provider.connect_timeout_ms,
         provider.request_timeout_ms,
     )
+
+
+def validate_provider_credentials(db):
+    from sqlalchemy import select
+    from .models import Provider
+
+    providers = db.scalars(
+        select(Provider).where(
+            Provider.state == "enabled",
+            Provider.routing_enabled == True,
+            Provider.adapter_type == "jasmin_http",
+        )
+    ).all()
+    if not providers:
+        raise AdapterConfigurationError("no_enabled_jasmin_provider")
+    return {provider.id: adapter_for(provider).validate_credentials() for provider in providers}
 
 
 def run_once(owner=None):
@@ -34,6 +54,9 @@ def run_once(owner=None):
 
 
 def main():
+    if production_enabled():
+        with SessionLocal() as db:
+            validate_provider_credentials(db)
     while True:
         if not run_once():
             time.sleep(2)

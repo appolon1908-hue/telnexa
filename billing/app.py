@@ -22,11 +22,9 @@ from .models import (
     BillingAccount,
     Campaign,
     Contact,
-    CountryPolicy,
     Invoice,
     LedgerEntry,
     Message,
-    Route,
     Sender,
     Tenant,
     Usage,
@@ -130,7 +128,15 @@ def ready(db: Session = Depends(session)):
 @app.get("/readyz")
 def readyz(db: Session = Depends(session)):
     db.execute(select(1))
-    return {"status": "ready"}
+    if production_enabled():
+        from .dispatch_worker import validate_provider_credentials
+
+        try:
+            validated = validate_provider_credentials(db)
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc))
+        return {"status": "ready", "provider_credentials": {key: "readable" for key in validated}}
+    return {"status": "ready", "production_sms": "disabled"}
 
 
 @app.get("/version")
@@ -239,20 +245,6 @@ def send(
     if not sender or sender.status != "approved":
         raise HTTPException(409, "sender_not_approved")
     if production_enabled():
-        route_countries = {
-            r.country
-            for r in db.scalars(select(Route).where(Route.enabled == True)).all()
-            if r.tenant_id in (None, tenant_id) and body.destination.startswith(r.prefix)
-        }
-        policy = db.scalar(
-            select(CountryPolicy).where(
-                CountryPolicy.country.in_(route_countries),
-                CountryPolicy.category == body.category,
-                CountryPolicy.enabled == True,
-            )
-        )
-        if not policy or (sender.countries and policy.country not in sender.countries):
-            raise HTTPException(403, "country_or_sender_policy_denied")
         if body.campaign_id:
             campaign = db.scalar(
                 select(Campaign).where(
@@ -269,7 +261,7 @@ def send(
             db,
             account.id,
             body.destination,
-            body.sender,
+            sender,
             body.content,
             body.category,
             idempotency_key,

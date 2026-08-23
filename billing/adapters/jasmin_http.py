@@ -66,6 +66,13 @@ class JasminHttpAdapter:
             "dlr-method": "POST",
         }
 
+    def validate_credentials(self):
+        """Read every required file; return names/status only, never secret values."""
+        self._secret(self.username_file)
+        self._secret(self.password_file)
+        self._secret(self.source_token_file)
+        return {"username": True, "password": True, "dlr_token": True}
+
     @staticmethod
     def parse_response(status, body):
         text = body.decode("utf-8", "replace").strip()

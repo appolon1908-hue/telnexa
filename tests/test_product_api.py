@@ -14,6 +14,7 @@ from billing.models import (
     AuthToken,
     BillingAccount,
     Contact,
+    CountryPolicy,
     Message,
     PricingPlan,
     Provider,
@@ -61,23 +62,44 @@ def seed(scopes="admin"):
         [
             Rate(
                 kind="provider",
-                country="ZZ",
-                prefix="+",
+                country="DE",
+                prefix="+49",
                 currency="EUR",
                 amount=Decimal(".02"),
-                provider="simulator",
+                provider="jasmin-send",
                 effective_from=now - timedelta(days=1),
             ),
             Rate(
                 kind="sell",
-                country="ZZ",
-                prefix="+",
+                country="DE",
+                prefix="+49",
                 currency="EUR",
                 amount=Decimal(".04"),
                 effective_from=now - timedelta(days=1),
             ),
         ]
     )
+    provider = Provider(
+        name="Send provider",
+        connector="jasmin-send",
+        state="enabled",
+        routing_enabled=True,
+        adapter_type="jasmin_http",
+        credential_reference="/run/secrets/jasmin_http",
+        health_score=1,
+    )
+    db.add(provider)
+    db.flush()
+    db.add(Route(country="DE", prefix="+49", provider_id=provider.id, priority=1, enabled=True))
+    for category in ("transactional", "service", "marketing"):
+        db.add(
+            CountryPolicy(
+                country="DE",
+                category=category,
+                enabled=True,
+                config={"allow_inbound_reopt_in": True},
+            )
+        )
     db.commit()
     return db, t, a, raw
 

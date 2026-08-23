@@ -27,11 +27,22 @@ done
 metrics_file="$secret_dir/metrics-token"
 provider_token_file="$secret_dir/provider-source-token"
 provider_registry_file="$secret_dir/provider-keys.json"
+provider_event_hmac_file="$secret_dir/provider-event-hmac"
+jasmin_username_file="$secret_dir/jasmin-http-username"
+jasmin_password_file="$secret_dir/jasmin-http-password"
+jasmin_dlr_token_file="$secret_dir/jasmin-dlr-token"
 [[ -s "$metrics_file" ]] || openssl rand -hex 32 | install -o root -g root -m 0600 /dev/stdin "$metrics_file"
 [[ -s "$provider_token_file" ]] || openssl rand -hex 32 | install -o root -g root -m 0600 /dev/stdin "$provider_token_file"
 provider_digest=$(sha256sum "$provider_token_file" | awk '{print $1}')
 printf '{"keys":[{"id":"jasmin-primary","enabled":true,"sha256":"%s"}]}\n' "$provider_digest" |
   install -o root -g root -m 0600 /dev/stdin "$provider_registry_file"
+sed -n 's/^WEBHOOK_HMAC_SECRET=//p' "$env_file" |
+  install -o root -g root -m 0600 /dev/stdin "$provider_event_hmac_file"
+sed -n 's/^JASMIN_API_USER=//p' "$env_file" |
+  install -o root -g root -m 0600 /dev/stdin "$jasmin_username_file"
+sed -n 's/^JASMIN_API_PASSWORD=//p' "$env_file" |
+  install -o root -g root -m 0600 /dev/stdin "$jasmin_password_file"
+install -o root -g root -m 0600 "$provider_token_file" "$jasmin_dlr_token_file"
 set_value() {
   local key=$1 value=$2 escaped
   escaped=$(printf '%s' "$value" | sed 's/[&|]/\\&/g')
@@ -40,6 +51,10 @@ set_value() {
 }
 set_value TELNEXA_PROVIDER_KEYS_FILE "$provider_registry_file"
 set_value TELNEXA_METRICS_TOKEN_FILE "$metrics_file"
+set_value TELNEXA_PROVIDER_EVENT_HMAC_FILE "$provider_event_hmac_file"
+set_value TELNEXA_JASMIN_HTTP_USERNAME_FILE "$jasmin_username_file"
+set_value TELNEXA_JASMIN_HTTP_PASSWORD_FILE "$jasmin_password_file"
+set_value TELNEXA_JASMIN_DLR_TOKEN_FILE "$jasmin_dlr_token_file"
 set_value OIDC_ALLOWED_AZP "${OIDC_ALLOWED_AZP:-telnexa-portal}"
 chown root:root "$env_file"
 chmod 0600 "$env_file"

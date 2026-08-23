@@ -1,10 +1,11 @@
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from .adapters.base import NormalizedSubmission, SubmissionOutcome
-from .engine import event, finalize, money, release, reserve, resolve_rate, segment_info
+from .engine import event, finalize, money, release, reserve, segment_info
+from .provider_capacity import acquire_provider_capacity, release_provider_capacity
 from .models import (
     Audit,
     BillingAccount,
@@ -13,9 +14,13 @@ from .models import (
     SmsDispatchJob,
     SmsReconciliationCase,
     SmsProductionCanaryGate,
+    SmsRouteDecision,
+    Provider,
+    Route,
+    Tenant,
     Usage,
 )
-from .routing import choose_route
+from .routing import authorize_route, persist_decision
 from .state_machine import transition
 
 
@@ -40,29 +45,36 @@ def accept_message(
     if prior:
         return prior
     encoding, chars, segments = segment_info(content)
-    cost = resolve_rate(db, "provider", account.tenant_id, "ZZ", destination)
-    sell = resolve_rate(db, "sell", account.tenant_id, "ZZ", destination)
+    tenant = db.get(Tenant, account.tenant_id)
+    authorized = authorize_route(
+        db, account.tenant_id, destination, sender, category, tenant.plan_id, encoding
+    )
+    cost, sell = authorized.provider_rate, authorized.sell_rate
     message = Message(
         tenant_id=account.tenant_id,
         idempotency_key=key,
         request_hash=request_hash,
         correlation_id=correlation,
         destination=destination,
-        sender=sender,
+        sender=sender.sender,
         content=content,
         content_hash=hashlib.sha256(content.encode()).hexdigest(),
         encoding=encoding,
         character_count=chars,
         segments=segments,
-        provider="pending",
+        provider=authorized.provider.name,
         status="accepted",
-        provider_rate_snapshot={"id": cost.id, "amount": str(cost.amount)},
-        sell_rate_snapshot={"id": sell.id, "amount": str(sell.amount)},
+        provider_rate_snapshot={},
+        sell_rate_snapshot={},
         estimated_provider_cost=money(cost.amount * segments),
         estimated_sell_amount=money(sell.amount * segments),
     )
     db.add(message)
     db.flush()
+    decision = persist_decision(db, message, sender, authorized)
+    message.route_decision_id = decision.id
+    message.provider_rate_snapshot = decision.provider_rate_snapshot
+    message.sell_rate_snapshot = decision.sell_rate_snapshot
     reservation = reserve(
         db, account.id, message.estimated_sell_amount, f"send:{key}", message.id, correlation
     )
@@ -73,9 +85,15 @@ def accept_message(
         "queued",
         f"accept:{message.id}",
         "sms.accepted",
-        {"category": category, "segments": segments},
+        {"category": category, "segments": segments, "route_decision_id": decision.id},
     )
-    job = SmsDispatchJob(tenant_id=message.tenant_id, message_id=message.id, state="queued")
+    job = SmsDispatchJob(
+        tenant_id=message.tenant_id,
+        message_id=message.id,
+        state="queued",
+        selected_provider_id=authorized.provider.id,
+        route_decision_id=decision.id,
+    )
     db.add(job)
     db.flush()
     message.dispatch_job_id = job.id
@@ -124,36 +142,42 @@ def claim_job(db, owner, lease_seconds=60):
 
 def process_job(db, job, adapter_factory):
     message = db.get(Message, job.message_id)
-    selection = choose_route(db, message)
-    if not selection:
-        release(db, message.reservation_id, message.correlation_id, "no_route")
-        transition(db, message, "rejected", f"no-route:{job.id}", evidence={"reason": "no_route"})
+    decision = db.get(SmsRouteDecision, job.route_decision_id)
+    provider = db.get(Provider, decision.selected_provider_id) if decision else None
+    route = db.get(Route, decision.selected_route_id) if decision else None
+    if not decision or not provider or not route:
+        release(db, message.reservation_id, message.correlation_id, "route_decision_missing")
+        transition(
+            db,
+            message,
+            "rejected",
+            f"no-route:{job.id}",
+            evidence={"reason": "route_decision_missing"},
+        )
         job.state = "rejected"
-        job.last_error_code = "no_route"
+        job.last_error_code = "route_decision_missing"
         return
-    provider, route, decision = selection.provider, selection.route, selection.decision
-    job.selected_provider_id = provider.id
-    job.route_decision_id = decision.id
-    message.route_decision_id = decision.id
-    message.provider = provider.name
+    if (
+        message.provider_rate_snapshot != decision.provider_rate_snapshot
+        or message.sell_rate_snapshot != decision.sell_rate_snapshot
+        or message.provider != provider.name
+        or decision.country != route.country
+        or decision.route_version != route.version
+        or job.selected_provider_id != provider.id
+    ):
+        release(db, message.reservation_id, message.correlation_id, "route_rate_consensus_failed")
+        transition(
+            db,
+            message,
+            "rejected",
+            f"route-rate:{job.id}",
+            evidence={"reason": "route_rate_consensus_failed"},
+        )
+        job.state = "rejected"
+        job.last_error_code = "route_rate_consensus_failed"
+        return
     now = datetime.now(timezone.utc)
-    inflight = db.scalar(
-        select(func.count())
-        .select_from(SmsDispatchJob)
-        .where(
-            SmsDispatchJob.selected_provider_id == provider.id,
-            SmsDispatchJob.state == "dispatching",
-        )
-    )
-    recent = db.scalar(
-        select(func.count())
-        .select_from(SmsDispatchAttempt)
-        .where(
-            SmsDispatchAttempt.provider_id == provider.id,
-            SmsDispatchAttempt.started_at >= now - timedelta(seconds=1),
-        )
-    )
-    if inflight > provider.max_inflight or recent >= provider.tps:
+    if not acquire_provider_capacity(db, provider.id, now):
         transition(db, message, "retry_wait", f"throttle:{job.id}:{job.attempt_count + 1}")
         job.state = "retry_wait"
         job.available_at = now + timedelta(seconds=1)
@@ -184,7 +208,10 @@ def process_job(db, job, adapter_factory):
         message.segments,
         message.id,
     )
-    result = adapter_factory(provider).submit(submission)
+    try:
+        result = adapter_factory(provider).submit(submission)
+    finally:
+        release_provider_capacity(db, provider.id)
     attempt.completed_at = datetime.now(timezone.utc)
     attempt.outcome = result.outcome.value
     attempt.provider_message_id = result.provider_message_id
@@ -210,7 +237,7 @@ def process_job(db, job, adapter_factory):
                 Usage(
                     tenant_id=message.tenant_id,
                     message_id=message.id,
-                    country="ZZ",
+                    country=decision.country,
                     provider=message.provider,
                     sender=message.sender,
                     segments=message.segments,

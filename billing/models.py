@@ -392,6 +392,9 @@ class Provider(Base):
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_streak: Mapped[int] = mapped_column(Integer, default=0)
+    inflight_count: Mapped[int] = mapped_column(Integer, default=0)
+    tps_window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tps_window_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -593,6 +596,9 @@ class SmsRouteDecision(Base):
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
     destination_prefix: Mapped[str] = mapped_column(String(32))
     country: Mapped[str] = mapped_column(String(2))
+    network: Mapped[str | None] = mapped_column(String(20))
+    sender_id: Mapped[str | None] = mapped_column(String(36))
+    country_policy_id: Mapped[str | None] = mapped_column(String(36))
     selected_provider_id: Mapped[str | None] = mapped_column(String(36), index=True)
     selected_route_id: Mapped[str | None] = mapped_column(String(36))
     route_version: Mapped[int | None] = mapped_column(Integer)

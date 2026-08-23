@@ -62,7 +62,18 @@ def event(db, tenant, event_type, key, correlation, payload):
     )
 
 
-def resolve_rate(db, kind, tenant, country, destination, plan_id=None, when=None):
+def resolve_rate(
+    db,
+    kind,
+    tenant,
+    country,
+    destination,
+    plan_id=None,
+    when=None,
+    provider=None,
+    connector=None,
+    network=None,
+):
     when = when or datetime.now(timezone.utc)
     rates = db.scalars(
         select(Rate)
@@ -75,6 +86,13 @@ def resolve_rate(db, kind, tenant, country, destination, plan_id=None, when=None
         if destination.startswith(r.prefix)
         and (r.tenant_id in (None, tenant))
         and (r.plan_id in (None, plan_id))
+        and (r.network in (None, network))
+        and (
+            kind != "provider"
+            or (provider is None and connector is None)
+            or (r.provider and r.provider in {provider, connector})
+            or (r.connector and r.connector == connector)
+        )
     ]
     if not candidates:
         raise ValueError(f"no_{kind}_rate")
@@ -82,6 +100,10 @@ def resolve_rate(db, kind, tenant, country, destination, plan_id=None, when=None
         key=lambda r: (
             r.tenant_id == tenant,
             r.plan_id == plan_id,
+            r.provider == provider,
+            r.provider == connector,
+            r.connector == connector,
+            r.network == network,
             len(r.prefix),
             r.priority,
         ),
