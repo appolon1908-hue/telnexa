@@ -74,6 +74,15 @@ TELNEXA_MIDDLEWARE_CLIENT_KEY_FILE
 TELNEXA_PROVIDER_KEYS_FILE
 ```
 
+## Required CI evidence
+
+Both the exact source SHA and the GitHub merge-result SHA must pass the identity
+contract workflow. The full repository workflow must also pass formatting,
+Ruff, the complete test suite, dependency audit, Compose rendering, non-root
+image validation, and Gitleaks. Checkout credentials are not persisted; the
+secret scanner receives only read access to repository contents and pull-request
+metadata.
+
 Do not activate the override until `telnexa-gateway`, its scopes and audience,
 the middleware receiver, certificates, replay store, and rollback path have all
 passed staging validation.
