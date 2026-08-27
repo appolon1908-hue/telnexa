@@ -1,0 +1,103 @@
+openapi: 3.1.0
+info:
+  title: Telnexa SMS API for Codestra Middleware
+  version: 2.0.0
+paths:
+  /v1/sms/senders:
+    get:
+      operationId: listSmsSenders
+      security: [{oauth2: [sms.sender.read]}]
+      responses: {'200': {description: Tenant-scoped senders}}
+    post:
+      operationId: createSmsSender
+      security: [{oauth2: [sms.sender.write]}]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}}
+  /v1/sms/templates:
+    get:
+      operationId: listSmsTemplates
+      security: [{oauth2: [sms.template.read]}]
+      responses: {'200': {description: Tenant-scoped templates}}
+    post:
+      operationId: createSmsTemplate
+      security: [{oauth2: [sms.template.write]}]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}}
+  /v1/sms/messages:
+    post:
+      operationId: submitSmsMessage
+      security: [{oauth2: [sms.message.send]}]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}, '409': {description: Idempotency conflict}}
+  /v1/sms/messages/{message_id}:
+    get:
+      operationId: getSmsMessage
+      security: [{oauth2: [sms.message.read]}]
+      parameters: [{name: message_id, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Reconciled message state}}
+  /v1/sms/conversations:
+    get:
+      operationId: listSmsConversations
+      security: [{oauth2: [sms.conversation.read]}]
+      responses: {'200': {description: Tenant-scoped conversations}}
+  /v1/sms/conversations/{conversation_id}/messages:
+    post:
+      operationId: sendConversationMessage
+      security: [{oauth2: [sms.message.send]}]
+      parameters:
+        - {name: conversation_id, in: path, required: true, schema: {type: string, format: uuid}}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}}
+  /v1/sms/suppressions:
+    get:
+      operationId: listSmsSuppressions
+      security: [{oauth2: [sms.suppression.read]}]
+      responses: {'200': {description: Tenant-scoped suppressions}}
+    post:
+      operationId: createSmsSuppression
+      security: [{oauth2: [sms.suppression.write]}]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}}
+  /v1/sms/usage:
+    get:
+      operationId: getSmsUsage
+      security: [{oauth2: [sms.usage.read]}]
+      responses: {'200': {description: Rated usage projection}}
+  /v1/sms/provider-health:
+    get:
+      operationId: getSmsProviderHealth
+      security: [{oauth2: [sms.provider-health.read]}]
+      responses: {'200': {description: Redacted provider health}}
+  /v1/webhooks/sms/jasmin:
+    post:
+      operationId: receiveJasminWebhook
+      security: []
+      responses: {'202': {description: Durable callback acceptance after verification}}
+components:
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.codestra.co/realms/codestra/protocol/openid-connect/token
+          scopes:
+            sms.sender.read: Read senders
+            sms.sender.write: Request sender changes
+            sms.template.read: Read templates
+            sms.template.write: Request template changes
+            sms.message.send: Request a policy-approved SMS
+            sms.message.read: Read message state
+            sms.conversation.read: Read conversations
+            sms.suppression.read: Read suppressions
+            sms.suppression.write: Request suppression
+            sms.usage.read: Read rated usage
+            sms.provider-health.read: Read redacted provider health
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: {type: string, minLength: 8, maxLength: 180}
+  responses:
+    OperationAccepted:
+      description: Durable asynchronous operation accepted
