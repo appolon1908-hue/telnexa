@@ -1,5 +1,20 @@
 # Telnexa Jasmin SMS Gateway
 
+## Repository authority
+
+This repository is the **Telnexa SMS/backend runtime authority**. It owns Jasmin HTTP/SMPP integration, SMS routing, delivery receipts, signed MO/DLR/failure callbacks, billing/wallet/ledger state, runtime deployment, backup/restore and provider-facing SMS operations.
+
+`appolon1908-hue/Telnexa-web` is the separate **public website and service-onboarding frontend**. The website must call Codestra Middleware for governed business actions and must not become a second Jasmin/SMPP backend, billing ledger, SMS credential store or provider runtime.
+
+Telnexa is SMS infrastructure. VICIdial/Asterisk voice/contact-center operations are owned separately by `appolon1908-hue/Vicidialer-Codestra` and integrate through Middleware; Telnexa must not be treated as the VICIdial voice adapter.
+
+Canonical cross-system boundary:
+
+```text
+Telnexa-web -> Kong -> Middleware -> Telnexa/Jasmin
+                                  -> VICIdial connector (separate voice system)
+```
+
 Production-oriented Docker Compose deployment for `telnexa.co`. It provides Jasmin's HTTP/SMPP gateway, Redis, RabbitMQ, an HTTPS reverse proxy, signed webhook relay, host monitoring, health checks, persistence, and operator tooling. No carrier credentials or real routes are included.
 
 The repository also contains an additive multi-tenant billing control plane: private PostgreSQL, decimal wallets, immutable ledger enforcement, atomic reservations, deterministic rate snapshots, simulator-safe charging, usage/margin data, invoice/payment foundations, tenant APIs, portal shells, signed middleware event outbox, migrations and billing backup/restore. See [billing architecture](docs/BILLING_ARCHITECTURE.md). Production SMS remains disabled until real provider credentials and an explicitly authorized destination are supplied.
