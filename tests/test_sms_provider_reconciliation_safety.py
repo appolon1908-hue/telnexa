@@ -24,9 +24,7 @@ def _command(key: str) -> SmsCommand:
     message_id = uuid.uuid5(uuid.NAMESPACE_URL, f"telnexa:{key}:message")
     return SmsCommand.model_validate(
         {
-            "command_id": str(
-                uuid.uuid5(uuid.NAMESPACE_URL, f"telnexa:{key}:command")
-            ),
+            "command_id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"telnexa:{key}:command")),
             "command_type": "sms.message.submit.v1",
             "command_version": "1.0",
             "target": "telnexa-sms",
@@ -55,9 +53,7 @@ def _command(key: str) -> SmsCommand:
 
 
 def _service(tmp_path, transport: ScriptedJasminTransport) -> SmsProviderService:
-    _, session_factory = create_session_factory(
-        f"sqlite:///{tmp_path / 'reconciliation.db'}"
-    )
+    _, session_factory = create_session_factory(f"sqlite:///{tmp_path / 'reconciliation.db'}")
     return SmsProviderService(
         session_factory=session_factory,
         transport=transport,
@@ -146,10 +142,7 @@ def test_serial_attempt_numbers_and_evidence_remain_unique(tmp_path) -> None:
     with provider.session_factory() as session:
         evidence = (
             session.query(SmsReconciliationEvidence)
-            .filter(
-                SmsReconciliationEvidence.operation_id
-                == submitted["operation_id"]
-            )
+            .filter(SmsReconciliationEvidence.operation_id == submitted["operation_id"])
             .order_by(SmsReconciliationEvidence.attempt_number)
             .all()
         )
