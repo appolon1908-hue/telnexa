@@ -54,9 +54,10 @@ class SmsProviderReconciliationMixin:
                 session.commit()
                 return self._operation_json(operation)
 
+            recovered_from_submitting = operation.state == "submitting"
             operation.reconciliation_attempts += 1
             attempt = operation.reconciliation_attempts
-            if operation.state == "submitting":
+            if recovered_from_submitting:
                 operation.last_error = (
                     "submission result was not durably recorded; authoritative read-back required"
                 )
@@ -137,7 +138,7 @@ class SmsProviderReconciliationMixin:
                     "readback_attempt": attempt,
                     "submission_attempts": operation.submission_attempts,
                     "provider_resubmissions": 0,
-                    "recovered_from_submitting": operation.state == "submitting",
+                    "recovered_from_submitting": recovered_from_submitting,
                     "durable_provider_reference": bool(effective_reference),
                 },
                 occurred_at=utcnow(),
