@@ -1,0 +1,90 @@
+name: telnexa-step4-certification
+
+x-synthetic-environment: &synthetic-environment
+  TELNEXA_MIDDLEWARE_BEARER_TOKEN: ${STAGE4_MIDDLEWARE_TOKEN:-stage4-middleware-token-not-secret-000000000000}
+  TELNEXA_PROVIDER_CALLBACK_SECRET: ${STAGE4_PROVIDER_CALLBACK_SECRET:-stage4-provider-callback-not-secret-000000000000}
+  TELNEXA_MIDDLEWARE_CALLBACK_SECRET: ${STAGE4_MIDDLEWARE_CALLBACK_SECRET:-stage4-callback-to-middleware-not-secret-00000000}
+  SMS_DELIVERY: "false"
+  LIVE_SMS_DELIVERY: "false"
+  JASMIN_LIVE_SUBMISSION: "false"
+
+services:
+  postgres:
+    image: postgres:17.6-alpine@sha256:d5f196a551b5cef1c70853c6dd588f456d16ca4ea733e3f31c75bc1ae2f65f3f
+    environment:
+      POSTGRES_DB: telnexa_stage4
+      POSTGRES_USER: stage4
+      POSTGRES_PASSWORD: stage4-postgres-not-secret
+    volumes:
+      - ../../billing/migrations/004_sms_provider_runtime.sql:/docker-entrypoint-initdb.d/004_sms_provider_runtime.sql:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    networks: [certification]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stage4 -d telnexa_stage4"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    security_opt: ["no-new-privileges:true"]
+
+  jasmin-simulator:
+    build:
+      context: ../..
+      dockerfile: labs/middleware_telnexa/Dockerfile
+    command: ["uvicorn", "labs.middleware_telnexa.jasmin_simulator:app", "--host", "0.0.0.0", "--port", "8080"]
+    networks: [certification]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+  provider:
+    build:
+      context: ../..
+      dockerfile: labs/middleware_telnexa/Dockerfile
+    command: ["uvicorn", "billing.sms_provider_service:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      <<: *synthetic-environment
+      TELNEXA_SMS_DATABASE_URL: postgresql+psycopg://stage4:stage4-postgres-not-secret@postgres:5432/telnexa_stage4
+      TELNEXA_SMS_AUTO_CREATE_SCHEMA: "false"
+      TELNEXA_JASMIN_TRANSPORT: http-simulator
+      TELNEXA_JASMIN_SIMULATOR_ENABLED: "true"
+      TELNEXA_JASMIN_SIMULATOR_URL: http://jasmin-simulator:8080
+    depends_on:
+      postgres: {condition: service_healthy}
+      jasmin-simulator: {condition: service_healthy}
+    networks: [certification]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+  certify:
+    build:
+      context: ../..
+      dockerfile: labs/middleware_telnexa/Dockerfile
+    environment:
+      <<: *synthetic-environment
+      STAGE4_PROVIDER_URL: http://provider:8080
+      STAGE4_SIMULATOR_URL: http://jasmin-simulator:8080
+    depends_on:
+      provider: {condition: service_healthy}
+    networks: [certification]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+
+networks:
+  certification:
+    internal: true
