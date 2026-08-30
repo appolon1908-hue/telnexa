@@ -68,22 +68,17 @@ class SmsProviderReconciliationMixin:
                 result = ReadbackResult("unknown", error=type(error).__name__)
 
             reservation = session.scalar(
-                select(SmsReservation).where(
-                    SmsReservation.operation_id == operation.id
-                )
+                select(SmsReservation).where(SmsReservation.operation_id == operation.id)
             )
             assert reservation is not None
 
-            effective_reference = (
-                result.provider_reference or operation.provider_reference
-            )
+            effective_reference = result.provider_reference or operation.provider_reference
             operation.provider_reference = effective_reference
             operation.provider_status = result.provider_status or operation.provider_status
             operation.last_error = result.error
 
             reference_required = (
-                result.outcome in {"accepted", "delivered"}
-                and not effective_reference
+                result.outcome in {"accepted", "delivered"} and not effective_reference
             )
             if reference_required:
                 operation.last_error = (
