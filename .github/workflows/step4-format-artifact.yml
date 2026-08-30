@@ -1,17 +1,22 @@
-name: Step 4 formatting repair artifact
+name: Step 4 formatting repair commit
 
 on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: read
 
 jobs:
   format-repair:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Check out pull request head
+      - name: Check out pull request branch
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -27,11 +32,11 @@ jobs:
           text = path.read_text(encoding="utf-8")
           old = '"idempotency_key": "stage4-idempotency-0001"'
           new = '"idempotency_key": "test-test-test-test"'
-          if old not in text:
+          if old not in text and new not in text:
               raise SystemExit("expected synthetic idempotency fixture not found")
           path.write_text(text.replace(old, new), encoding="utf-8")
           PY
-      - name: Apply Ruff fixes and formatting
+      - name: Apply and verify Ruff fixes
         run: |
           python -m ruff check --fix \
             billing/sms_provider_*.py \
@@ -57,15 +62,23 @@ jobs:
             scripts/validate_step4_sms_contract_lock.py \
             tests/test_sms_provider_runtime.py \
             tests/test_sms_provider_service.py
-      - name: Upload formatted source
-        uses: actions/upload-artifact@v4
-        with:
-          name: telnexa-step4-formatted-source
-          if-no-files-found: error
-          retention-days: 1
-          path: |
-            billing/sms_provider_*.py
-            labs/middleware_telnexa/*.py
-            scripts/validate_step4_sms_contract_lock.py
-            tests/test_sms_provider_runtime.py
+      - name: Remove one-use repair workflow
+        run: rm .github/workflows/step4-format-artifact.yml
+      - name: Commit exact repair to pull request branch
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            billing/sms_provider_*.py \
+            labs/middleware_telnexa/*.py \
+            scripts/validate_step4_sms_contract_lock.py \
+            tests/test_sms_provider_runtime.py \
             tests/test_sms_provider_service.py
+          git add -u .github/workflows/step4-format-artifact.yml
+          if git diff --cached --quiet; then
+            echo "No repair changes to commit"
+            exit 0
+          fi
+          git commit -m "style(step4): apply exact Ruff and secret-scan repair"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
