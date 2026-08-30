@@ -52,13 +52,9 @@ class SmsProviderEventsMixin:
 
             query = select(SmsOperation).where(SmsOperation.tenant_id == callback.tenant_id)
             if callback.message_id:
-                query = query.where(
-                    SmsOperation.middleware_message_id == str(callback.message_id)
-                )
+                query = query.where(SmsOperation.middleware_message_id == str(callback.message_id))
             else:
-                query = query.where(
-                    SmsOperation.provider_reference == callback.provider_reference
-                )
+                query = query.where(SmsOperation.provider_reference == callback.provider_reference)
             operation = session.scalar(query)
             if not operation:
                 raise ProviderNotFound("DLR does not match a tenant SMS operation")
@@ -66,9 +62,9 @@ class SmsProviderEventsMixin:
             target = _canonical_provider_status(callback.provider_status)
             current_rank = STATE_RANK.get(operation.state, 0)
             target_rank = STATE_RANK.get(target, 0)
-            ignored = (
-                operation.state == "delivered" and target != "delivered"
-            ) or (target_rank < current_rank)
+            ignored = (operation.state == "delivered" and target != "delivered") or (
+                target_rank < current_rank
+            )
             if not ignored:
                 operation.state = target
                 operation.provider_status = callback.provider_status

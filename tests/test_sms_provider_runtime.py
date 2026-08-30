@@ -222,9 +222,7 @@ def test_signed_dlr_replay_and_monotonic_state(tmp_path) -> None:
 
     with provider.session_factory() as session:
         ignored = session.scalar(
-            select(SmsProviderEvent).where(
-                SmsProviderEvent.external_event_id == "jasmin-dlr-2"
-            )
+            select(SmsProviderEvent).where(SmsProviderEvent.external_event_id == "jasmin-dlr-2")
         )
         assert ignored is not None
         assert ignored.ignored_transition is True

@@ -69,7 +69,7 @@ def main() -> None:
             "tenant_id": TENANT,
             "requested_by": "middleware-stage4-certifier",
             "correlation_id": "stage4-correlation-0001",
-            "idempotency_key": "stage4-idempotency-0001",
+            "idempotency_key": "test-test-test-test",
             "capability": "SMS_DELIVERY",
             "payload": {
                 "message_id": message_id,
@@ -120,8 +120,7 @@ def main() -> None:
         states: list[str] = []
         for _ in range(3):
             response = client.post(
-                PROVIDER_URL
-                + f"/api/v1/provider/operations/{operation['operation_id']}/reconcile",
+                PROVIDER_URL + f"/api/v1/provider/operations/{operation['operation_id']}/reconcile",
                 headers=headers(),
             )
             response.raise_for_status()

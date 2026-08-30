@@ -96,17 +96,13 @@ def test_private_api_auth_idempotency_reconciliation_and_callbacks(tmp_path) -> 
     payload = command()
 
     assert client.post("/api/v1/provider/operations", json=payload).status_code == 401
-    submitted = client.post(
-        "/api/v1/provider/operations", json=payload, headers=auth()
-    )
+    submitted = client.post("/api/v1/provider/operations", json=payload, headers=auth())
     assert submitted.status_code == 202
     operation = submitted.json()
     assert operation["state"] == "reconciliation_required"
     assert operation["submission_attempts"] == 1
 
-    replay = client.post(
-        "/api/v1/commands/sms.message.submit.v1", json=payload, headers=auth()
-    )
+    replay = client.post("/api/v1/commands/sms.message.submit.v1", json=payload, headers=auth())
     assert replay.status_code == 202
     assert replay.json()["replay"] is True
     assert transport.submit_calls == 1

@@ -11,6 +11,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .sms_provider_contracts import uid, utcnow
 
+
 class SmsBase(DeclarativeBase):
     pass
 
@@ -94,9 +95,7 @@ class SmsProviderEvent(SmsBase):
 
 class SmsInbound(SmsBase):
     __tablename__ = "sms_provider_inbound"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "provider", "provider_message_id"),
-    )
+    __table_args__ = (UniqueConstraint("tenant_id", "provider", "provider_message_id"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
@@ -155,9 +154,13 @@ class SmsReconciliationEvidence(SmsBase):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
-
 __all__ = [
-    "SmsBase", "SmsOperation", "SmsReservation", "SmsProviderEvent",
-    "SmsInbound", "SmsOptOut", "SmsCallbackOutbox",
+    "SmsBase",
+    "SmsOperation",
+    "SmsReservation",
+    "SmsProviderEvent",
+    "SmsInbound",
+    "SmsOptOut",
+    "SmsCallbackOutbox",
     "SmsReconciliationEvidence",
 ]

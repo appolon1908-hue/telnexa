@@ -19,6 +19,7 @@ from .sms_provider_models import (
     SmsReservation,
 )
 
+
 @dataclass(slots=True)
 class SmsProviderServiceBase:
     session_factory: sessionmaker[Session]
@@ -73,14 +74,10 @@ class SmsProviderServiceBase:
         event_payload = {
             **payload,
             "message_id": (
-                operation.middleware_message_id
-                if operation
-                else payload.get("message_id")
+                operation.middleware_message_id if operation else payload.get("message_id")
             ),
             "provider_reference": (
-                operation.provider_reference
-                if operation
-                else payload.get("provider_reference")
+                operation.provider_reference if operation else payload.get("provider_reference")
             ),
             "status": canonical_status,
             "provider_status": provider_status,
