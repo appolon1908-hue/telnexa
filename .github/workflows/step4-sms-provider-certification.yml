@@ -81,17 +81,20 @@ jobs:
             labs/middleware_telnexa \
             scripts/validate_step4_sms_contract_lock.py \
             tests/test_sms_provider_runtime.py \
-            tests/test_sms_provider_service.py
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
           python -m ruff check \
             billing/sms_provider_*.py \
             labs/middleware_telnexa \
             scripts/validate_step4_sms_contract_lock.py \
             tests/test_sms_provider_runtime.py \
-            tests/test_sms_provider_service.py
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
           python -m compileall -q billing labs scripts tests
           python -m pytest -q \
             tests/test_sms_provider_runtime.py \
             tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py \
             tests/test_billing_engine.py \
             tests/test_product_api.py \
             tests/test_webhook_relay.py \
@@ -159,14 +162,19 @@ jobs:
             labs/middleware_telnexa \
             scripts/validate_step4_sms_contract_lock.py \
             tests/test_sms_provider_runtime.py \
-            tests/test_sms_provider_service.py
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
           python -m ruff check \
             billing/sms_provider_*.py \
             labs/middleware_telnexa \
             scripts/validate_step4_sms_contract_lock.py \
             tests/test_sms_provider_runtime.py \
-            tests/test_sms_provider_service.py
-          python -m pytest -q tests/test_sms_provider_runtime.py tests/test_sms_provider_service.py
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
+          python -m pytest -q \
+            tests/test_sms_provider_runtime.py \
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
 
   isolated-postgres-jasmin-lab:
     name: Isolated PostgreSQL and no-effect Jasmin certification
@@ -192,11 +200,35 @@ jobs:
       - name: Verify PostgreSQL durability and one-submit constraint
         run: |
           docker compose -f labs/middleware_telnexa/compose.yml exec -T postgres \
-            psql -v ON_ERROR_STOP=1 -U stage4 -d telnexa_stage4 -c \
-            "SELECT count(*) = 1 AS one_operation, max(submission_attempts) = 1 AS one_submit FROM sms_provider_operations;"
-          docker compose -f labs/middleware_telnexa/compose.yml exec -T postgres \
-            psql -v ON_ERROR_STOP=1 -U stage4 -d telnexa_stage4 -c \
-            "SELECT count(*) = 7 AS seven_tenant_policies FROM pg_policies WHERE tablename LIKE 'sms_provider_%';"
+            psql -v ON_ERROR_STOP=1 -U stage4 -d telnexa_stage4 <<'SQL'
+          DO $$
+          DECLARE
+            operation_count integer;
+            maximum_submission_attempts integer;
+            tenant_policy_count integer;
+          BEGIN
+            SELECT count(*), COALESCE(max(submission_attempts), -1)
+              INTO operation_count, maximum_submission_attempts
+              FROM sms_provider_operations;
+            IF operation_count <> 1 OR maximum_submission_attempts <> 1 THEN
+              RAISE EXCEPTION
+                'unexpected SMS operation evidence: count=%, max_submission_attempts=%',
+                operation_count,
+                maximum_submission_attempts;
+            END IF;
+
+            SELECT count(*)
+              INTO tenant_policy_count
+              FROM pg_policies
+             WHERE tablename LIKE 'sms_provider_%';
+            IF tenant_policy_count <> 7 THEN
+              RAISE EXCEPTION
+                'unexpected SMS tenant policy count: %',
+                tenant_policy_count;
+            END IF;
+          END
+          $$;
+          SQL
           echo "TELNEXA_POSTGRES_DURABILITY=PASS"
           if docker compose -f labs/middleware_telnexa/compose.yml exec -T postgres \
             psql -v ON_ERROR_STOP=1 -U stage4 -d telnexa_stage4 -c \
