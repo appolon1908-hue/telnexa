@@ -62,6 +62,8 @@ Provider command APIs require a dedicated Middleware bearer identity and matchin
 
 The Step 4 workflow validates the exact source head and exact GitHub merge result. It also checks out the frozen SDK and Middleware SHAs, runs the contract-lock validator, applies the PostgreSQL migration in a disposable database, starts a no-effect Jasmin simulator on an internal Docker network, and proves zero external effects.
 
+The source was normalized with the workflow-pinned Ruff version, and the synthetic certification idempotency fixture was changed to a plainly non-secret test value before final GitHub certification.
+
 CI run IDs and final exact Git identities belong in PR #20 review evidence. They are not predeclared in this document.
 
 ## Safety
