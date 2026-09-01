@@ -30,10 +30,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact source head
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify exact source identity
         env:
@@ -41,7 +42,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Check out exact Middleware SMS authority
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: appolon1908-hue/Middleware-
           ref: ${{ env.MIDDLEWARE_SMS_SHA }}
@@ -49,14 +50,14 @@ jobs:
           persist-credentials: false
 
       - name: Check out exact SDK communications authority
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: appolon1908-hue/SDK-repository
           ref: ${{ env.SDK_COMMUNICATIONS_SHA }}
           path: _external/sdk
           persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.13"
           cache: pip
@@ -116,16 +117,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact synthetic merge result
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Verify exact merge-result identity
         run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
 
       - name: Check out exact Middleware SMS authority
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: appolon1908-hue/Middleware-
           ref: ${{ env.MIDDLEWARE_SMS_SHA }}
@@ -133,14 +135,14 @@ jobs:
           persist-credentials: false
 
       - name: Check out exact SDK communications authority
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: appolon1908-hue/SDK-repository
           ref: ${{ env.SDK_COMMUNICATIONS_SHA }}
           path: _external/sdk
           persist-credentials: false
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.13"
           cache: pip
@@ -182,9 +184,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact source head
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Render isolated Compose contract
         run: docker compose -f labs/middleware_telnexa/compose.yml config --quiet
