@@ -140,7 +140,7 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       JASMIN_ADMIN_USER: ${JASMIN_ADMIN_USER:-telnexa-admin}
       JASMIN_ADMIN_PASSWORD: ${JASMIN_ADMIN_PASSWORD:?set JASMIN_ADMIN_PASSWORD in .env}
-      JASMIN_API_USER: ${JASMIN_API_USER:-middleware}
+      JASMIN_API_USER: ${JASMIN_API_USER:-telnexa-adapter}
       JASMIN_API_PASSWORD: ${JASMIN_API_PASSWORD:?set JASMIN_API_PASSWORD in .env}
       JASMIN_API_GROUP: ${JASMIN_API_GROUP:-telnexa-api}
       JASMIN_HTTP_THROUGHPUT: ${JASMIN_HTTP_THROUGHPUT:-20}
@@ -168,11 +168,11 @@ services:
     restart: unless-stopped
     <<: *default-security
     environment:
-      WEBHOOK_TARGET_BASE_URL: ${WEBHOOK_TARGET_BASE_URL:-}
-      WEBHOOK_HMAC_SECRET: ${WEBHOOK_HMAC_SECRET:?set WEBHOOK_HMAC_SECRET in .env}
+      TELNEXA_PROVIDER_EVENT_URL: http://billing-api:8000
+      TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE: /run/secrets/provider_event_hmac
       WEBHOOK_TIMEOUT_SECONDS: ${WEBHOOK_TIMEOUT_SECONDS:-10}
       TELNEXA_PROVIDER_KEYS_FILE: /run/secrets/telnexa_provider_keys
-    secrets: [telnexa_provider_keys]
+    secrets: [telnexa_provider_keys,provider_event_hmac]
     expose: ["8080"]
     networks: [backend, egress]
     healthcheck:
@@ -194,7 +194,6 @@ services:
     restart: unless-stopped
     <<: *default-security
     depends_on:
-      jasmin: {condition: service_healthy}
       webhook-relay: {condition: service_healthy}
     environment:
       SMS_DOMAIN: ${SMS_DOMAIN:-sms.telnexa.co}
@@ -250,6 +249,9 @@ services:
       BILLING_MIDDLEWARE_API_KEY: ${BILLING_MIDDLEWARE_API_KEY:?set BILLING_MIDDLEWARE_API_KEY in .env}
       BILLING_MIDDLEWARE_HMAC_SECRET: ${BILLING_MIDDLEWARE_HMAC_SECRET:?set BILLING_MIDDLEWARE_HMAC_SECRET in .env}
       BILLING_SIMULATOR_ENABLED: ${BILLING_SIMULATOR_ENABLED:-true}
+      TELNEXA_PRODUCTION_SMS_ENABLED: "false"
+      TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE: /run/secrets/provider_event_hmac
+      TELNEXA_DLR_RELAY_URL: http://webhook-relay:8080
       OIDC_ISSUER: https://auth.codestra.co/realms/codestra
       OIDC_AUDIENCE: codestra-api
       OIDC_ALLOWED_AZP: ${OIDC_ALLOWED_AZP:?set approved Codestra client identities}
@@ -272,7 +274,7 @@ services:
     command: ["uvicorn", "billing.app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
     volumes:
       - ./scripts/live-gate.sh:/usr/local/bin/live-gate:ro
-    secrets: [telnexa_metrics_token]
+    secrets: [telnexa_metrics_token,provider_event_hmac]
     depends_on:
       billing-db: {condition: service_healthy}
       billing-migrate: {condition: service_completed_successfully}
@@ -309,6 +311,59 @@ services:
     logging: *default-logging
     mem_limit: 512m
     cpus: 1
+
+  sms-dispatch-worker:
+    build: {context: ., dockerfile: billing/Dockerfile}
+    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    command: ["python", "-m", "billing.dispatch_worker"]
+    entrypoint: ["/usr/local/bin/live-gate"]
+    volumes: ["./scripts/live-gate.sh:/usr/local/bin/live-gate:ro"]
+    restart: unless-stopped
+    <<: *default-security
+    environment: *billing-environment
+    secrets: [jasmin_http_username,jasmin_http_password,jasmin_http_dlr_token]
+    depends_on:
+      billing-db: {condition: service_healthy}
+      billing-migrate: {condition: service_completed_successfully}
+      jasmin: {condition: service_healthy}
+    networks: [billing,backend]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+
+  sms-provider-event-worker:
+    build: {context: ., dockerfile: billing/Dockerfile}
+    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    command: ["python", "-m", "billing.provider_event_worker"]
+    entrypoint: ["/usr/local/bin/live-gate"]
+    volumes: ["./scripts/live-gate.sh:/usr/local/bin/live-gate:ro"]
+    restart: unless-stopped
+    <<: *default-security
+    environment: *billing-environment
+    depends_on:
+      billing-db: {condition: service_healthy}
+      billing-migrate: {condition: service_completed_successfully}
+    networks: [billing]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+
+  sms-reconciliation-worker:
+    build: {context: ., dockerfile: billing/Dockerfile}
+    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    command: ["python", "-m", "billing.reconciliation_worker"]
+    entrypoint: ["/usr/local/bin/live-gate"]
+    volumes: ["./scripts/live-gate.sh:/usr/local/bin/live-gate:ro"]
+    restart: unless-stopped
+    <<: *default-security
+    environment: *billing-environment
+    depends_on:
+      billing-db: {condition: service_healthy}
+      billing-migrate: {condition: service_completed_successfully}
+    networks: [billing]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
 
   certbot:
     image: certbot/certbot:v4.2.0@sha256:9626d72120577cf72da4fc7948806e9993598981720a4cbe04340a502468d67b
@@ -412,3 +467,7 @@ secrets:
   keycloak_db_password: {file: ./.secrets/keycloak_db_password}
   telnexa_provider_keys: {file: '${TELNEXA_PROVIDER_KEYS_FILE:?set root-owned provider key registry path}'}
   telnexa_metrics_token: {file: '${TELNEXA_METRICS_TOKEN_FILE:?set root-owned metrics token path}'}
+  provider_event_hmac: {file: '${TELNEXA_PROVIDER_EVENT_HMAC_FILE:-/etc/telnexa/secrets/provider-event-hmac}'}
+  jasmin_http_username: {file: '${TELNEXA_JASMIN_HTTP_USERNAME_FILE:-/etc/telnexa/secrets/jasmin-http-username}'}
+  jasmin_http_password: {file: '${TELNEXA_JASMIN_HTTP_PASSWORD_FILE:-/etc/telnexa/secrets/jasmin-http-password}'}
+  jasmin_http_dlr_token: {file: '${TELNEXA_JASMIN_DLR_TOKEN_FILE:-/etc/telnexa/secrets/jasmin-dlr-token}'}

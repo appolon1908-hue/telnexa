@@ -7,13 +7,10 @@ The repository also contains an additive multi-tenant billing control plane: pri
 ## Architecture
 
 ```text
-Customer / Odoo / n8n
-        | HTTPS
-        v
-existing middleware ---> sms.telnexa.co (Nginx) ---> Jasmin HTTP API
-        ^                                             |
-        | HMAC-signed MO/DLR/failure callbacks        | SMPP
-        +---- webhook relay <---- Jasmin <-------------+---- carrier(s) ---- mobile network
+Customer / Codestra Middleware -> Telnexa commercial API -> durable dispatch worker
+                                                        -> private Jasmin -> carrier
+carrier -> Jasmin -> webhook relay -> Telnexa provider-event inbox
+        -> billing/compliance/message state -> Middleware/customer outbox
 ```
 
 RabbitMQ and Redis are attached only to Docker's internal `backend` network and have no host ports. Jasmin's HTTP API, management console, and SMPP server use Docker `expose` only. Nginx is the sole public application entry point on ports 80/443. The Jasmin container also has a controlled egress network for carrier connections. Prometheus and node-exporter remain internal.
@@ -63,19 +60,15 @@ Certbot stores certificates in the `letsencrypt` volume. Renew with the same Cer
 
 ## Configuration and API
 
-Non-secret configuration is versioned under `config/` and `docker/`; deployment secrets live only in `.env`. The initial `middleware` Jasmin group/user is created idempotently at startup with HTTP/SMPP throughput quotas. Retrieve its username/password from `.env` and place them in the middleware's secret manager.
+Non-secret configuration is versioned under `config/` and `docker/`; deployment secrets are installed as root-owned secret files. The private `telnexa-adapter` Jasmin user is created idempotently with bounded throughput. Middleware never receives those credentials.
 
-After TLS, outbound middleware requests use `https://sms.telnexa.co/send`. Use URL/form parameters `username`, `password`, `to`, `from`, `content`, `coding`, `dlr`, `dlr-level`, `dlr-url`, and `dlr-method`. Use `coding=8` for Unicode. The provider adapter must construct the internal DLR URL as `http://webhook-relay:8080/events/dlr?source_key_id=<active-key-id>&source_token=<secret-reference-value>` from its protected provider credential; never persist or log the expanded URL. The relay removes these authentication fields before normalizing the event.
+Outbound callers use `https://api.telnexa.co/api/v1/messages` with tenant authentication, scope, idempotency key, and correlation ID. The Telnexa adapter alone maps the accepted message to Jasmin parameters and constructs the protected DLR URL at runtime. `https://sms.telnexa.co/send` is retired and returns 410.
 
 Provider onboarding: [docs/ADDING_SMPP_PROVIDER.md](docs/ADDING_SMPP_PROVIDER.md). Customer onboarding: [docs/ADDING_SMS_CUSTOMER.md](docs/ADDING_SMS_CUSTOMER.md).
 
-## Signed middleware webhooks
+## Signed provider-event ingress
 
-Set `WEBHOOK_TARGET_BASE_URL=https://middleware.example` and rotate `WEBHOOK_HMAC_SECRET`. Jasmin sends inbound/DLR callbacks to the internal relay. The relay normalizes and posts to:
-
-- `<base>/webhooks/sms/inbound`
-- `<base>/webhooks/sms/dlr`
-- `<base>/webhooks/sms/failed`
+Jasmin sends inbound/DLR callbacks to the internal relay. The relay authenticates the source and posts only to Telnexa's private `/internal/v1/provider-events/jasmin` durable inbox. Telnexa resolves authoritative tenant/message state before emitting signed Middleware and customer events from its outbox.
 
 Headers include `X-Signature-Version: v1`, `X-Telnexa-Timestamp`, `X-Telnexa-Event-Id`, and `X-Telnexa-Signature: sha256=<hex>`. Verify HMAC-SHA256 over the newline-joined canonical fields `v1`, uppercase HTTP method, normalized path, timestamp, event ID, source `telnexa`, and SHA-256 of the exact request body. Use constant-time comparison, reject timestamps older than five minutes, and deduplicate event IDs. Example bodies are in `examples/webhook-payloads.json`. Relay logs deliberately omit query strings, bodies, and secrets.
 
@@ -131,7 +124,7 @@ docker network inspect telnexa_backend
 df -h
 ```
 
-An authenticated send returning `No route found` is expected before a real carrier route exists. A 426 from Nginx means TLS has not been installed. A 503 from the webhook relay means `WEBHOOK_TARGET_BASE_URL` is intentionally unset or unreachable.
+An API message remains queued while production SMS is disabled. A 426 from Nginx means TLS has not been installed. A 502 from the webhook relay means Telnexa's private provider-event inbox is unreachable; Jasmin must retry the callback.
 
 ## Upgrade procedure
 
