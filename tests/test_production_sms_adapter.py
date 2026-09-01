@@ -1,3 +1,4 @@
+import hashlib
 import json
 import threading
 import time
@@ -15,6 +16,8 @@ from billing.models import (
     ConsentRecord,
     Contact,
     Message,
+    MessageEvent,
+    Outbox,
     PricingPlan,
     PhoneNumber,
     Provider,
@@ -631,3 +634,83 @@ def test_dlr_is_correlated_by_authenticated_provider_identity():
     assert first.status == "delivered"
     assert second.status == "submitted"
     assert row.message_id == first.id and row.tenant_id == tenant.id
+
+
+def test_dlr_downstream_idempotency_includes_authenticated_provider_key():
+    db, tenant, account = seed_dispatch()
+    sender = db.query(Sender).one()
+    first = accept_message(
+        db,
+        account.id,
+        "+491231",
+        sender,
+        "first",
+        "transactional",
+        "provider-key-one",
+        "corr-key-one",
+        "7" * 64,
+    )
+    second = accept_message(
+        db,
+        account.id,
+        "+491232",
+        sender,
+        "second",
+        "transactional",
+        "provider-key-two",
+        "corr-key-two",
+        "8" * 64,
+    )
+    provider_two = Provider(
+        name="Private Jasmin Two",
+        connector="jasmin-two",
+        state="enabled",
+        routing_enabled=True,
+        adapter_type="jasmin_http",
+        credential_reference="/run/secrets/jasmin_http_two",
+        dlr_source_key_id="jasmin-secondary",
+    )
+    db.add(provider_two)
+    db.flush()
+    second.provider = provider_two.name
+    db.get(SmsRouteDecision, second.route_decision_id).selected_provider_id = provider_two.id
+    for index, message in enumerate((first, second), start=1):
+        message.provider_message_id = "shared-provider-local-id"
+        transition(db, message, "dispatching", f"keyed-dispatch-{index}")
+        transition(db, message, "submitted", f"keyed-submit-{index}")
+
+    rows = []
+    for source_key_id in ("jasmin-primary", "jasmin-secondary"):
+        row = SmsProviderEventInbox(
+            source="jasmin",
+            source_key_id=source_key_id,
+            event_id="shared-provider-event-id",
+            event_type="DLR",
+            provider_message_id="shared-provider-local-id",
+            payload_hash=hashlib.sha256(source_key_id.encode()).hexdigest(),
+            normalized_payload={
+                "event": "dlr",
+                "data": {"id": "shared-provider-local-id", "status": "DELIVRD"},
+            },
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.add(row)
+        db.flush()
+        process_event(db, row)
+        rows.append(row)
+    db.commit()
+
+    assert first.status == second.status == "delivered"
+    assert [row.message_id for row in rows] == [first.id, second.id]
+    expected_identities = {
+        hashlib.sha256(f"jasmin\0{source_key_id}\0shared-provider-event-id".encode()).hexdigest()
+        for source_key_id in ("jasmin-primary", "jasmin-secondary")
+    }
+    delivery_events = db.query(MessageEvent).filter(MessageEvent.status == "delivered").all()
+    assert {event.external_event_id for event in delivery_events} == {
+        f"provider:{identity}" for identity in expected_identities
+    }
+    delivered_outbox = db.query(Outbox).filter(Outbox.event_type == "sms.delivered").all()
+    assert {item.idempotency_key for item in delivered_outbox} == {
+        f"sms:delivered:{identity}" for identity in expected_identities
+    }

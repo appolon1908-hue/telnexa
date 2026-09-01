@@ -61,6 +61,19 @@ def verify_signature(secret, method, path, timestamp, event_id, body, supplied, 
     return fresh and bool(event_id) and hmac.compare_digest(expected, supplied or "")
 
 
+def _provider_event_identity(row):
+    """Return a bounded identity for one authenticated provider event.
+
+    Provider-local event identifiers are not globally unique. Hash the source,
+    authenticated key identifier, and provider event identifier with explicit
+    field boundaries so every downstream idempotency authority stays both
+    collision-resistant and within its database column limit.
+    """
+
+    canonical = "\0".join((row.source, row.source_key_id, row.event_id)).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def ingest(db, source_key_id, event_id, body, payload):
     prior = db.scalar(
         select(SmsProviderEventInbox).where(
@@ -139,12 +152,13 @@ def _dlr(db, row, data):
         "REJECTD": "failed",
         "FAILED": "failed",
     }.get(raw, "unknown")
+    provider_event_identity = _provider_event_identity(row)
     changed = transition(
         db,
         message,
         status,
-        f"provider:{row.source}:{row.event_id}",
-        evidence={"provider_status": raw},
+        f"provider:{provider_event_identity}",
+        evidence={"provider_status": raw, "source_key_id": row.source_key_id},
         occurred_at=row.occurred_at,
     )
     if changed and status != "unknown":
@@ -152,7 +166,7 @@ def _dlr(db, row, data):
             db,
             message.tenant_id,
             f"sms.{status}",
-            f"sms:{status}:{row.event_id}",
+            f"sms:{status}:{provider_event_identity}",
             message.correlation_id,
             {"message_id": message.id, "status": status},
         )
@@ -294,7 +308,7 @@ def _mo(db, row, data):
         db,
         number.tenant_id,
         event_type,
-        f"sms:mo:{row.event_id}",
+        f"sms:mo:{_provider_event_identity(row)}",
         row.event_id,
         {"inbound_message_id": inbound.id},
     )
