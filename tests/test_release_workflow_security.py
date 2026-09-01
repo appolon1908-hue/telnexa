@@ -89,6 +89,9 @@ def test_release_is_retry_safe_and_attestation_is_verified() -> None:
     assert "cancel-in-progress: false" in WORKFLOW
     assert WORKFLOW.count("if existing=") == 2
     assert 'test "$existing" = "$CANDIDATE_DIGEST"' in WORKFLOW
+    assert "id: final_tag" in WORKFLOW
+    assert WORKFLOW.count("if: steps.final_tag.outputs.exists != 'true'") == 2
+    assert "echo 'exists=true' >> \"$GITHUB_OUTPUT\"" in WORKFLOW
     assert "cosign sign --yes" in WORKFLOW
     assert "cosign verify" in WORKFLOW
     assert "--certificate-identity" in WORKFLOW
