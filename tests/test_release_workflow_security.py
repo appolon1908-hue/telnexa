@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/release.yml").read_text()
+CI_WORKFLOW = (ROOT / ".github/workflows/ci.yml").read_text()
 
 
 def test_release_runs_only_from_protected_main() -> None:
@@ -55,6 +56,19 @@ def test_all_checkouts_disable_persisted_credentials() -> None:
             if next_step:
                 step = step[: next_step.start() + 1]
             assert "persist-credentials: false" in step, path
+
+
+def test_ci_separates_exact_source_and_merge_result_validation() -> None:
+    assert "branches: [main]" in CI_WORKFLOW
+    assert 'branches: [main, "agent/**", "codex/**"]' not in CI_WORKFLOW
+    assert "name: Exact source quality and tests" in CI_WORKFLOW
+    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in CI_WORKFLOW
+    assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' in CI_WORKFLOW
+    assert "name: Exact merge-result quality and tests" in CI_WORKFLOW
+    assert "if: github.event_name == 'pull_request'" in CI_WORKFLOW
+    assert "ref: ${{ github.sha }}" in CI_WORKFLOW
+    assert 'test "$(git rev-parse HEAD)" = "${{ github.sha }}"' in CI_WORKFLOW
+    assert "name: Secret scan" in CI_WORKFLOW
 
 
 def test_scan_precedes_production_promotion_and_uses_exact_digest() -> None:
