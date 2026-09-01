@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/release.yml").read_text()
 CI_WORKFLOW = (ROOT / ".github/workflows/ci.yml").read_text()
+GITLEAKS_IGNORE = (ROOT / ".gitleaksignore").read_text().splitlines()
 
 
 def test_release_runs_only_from_protected_main() -> None:
@@ -32,6 +33,20 @@ def test_release_dependencies_are_immutable() -> None:
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ):
         assert action in WORKFLOW
+
+
+def test_release_secret_scan_is_bound_to_protected_source_ancestry() -> None:
+    assert '--log-opts="$SOURCE_SHA"' in WORKFLOW
+    assert "--gitleaks-ignore-path /repo/.gitleaksignore" in WORKFLOW
+    assert "git --redact --no-banner" in WORKFLOW
+
+
+def test_historical_false_positive_allowlist_is_exact() -> None:
+    assert set(GITLEAKS_IGNORE) == {
+        "4b4e5c73463df1c03723438d97bffd9b73393b95:docker-compose.yml:generic-api-key:45",
+        "ed555db547bf161123ee6a3277a4262c3c6005e7:DEPLOYMENT_REPORT.md:generic-api-key:54",
+    }
+    assert len(GITLEAKS_IGNORE) == 2
 
 
 def test_all_workflow_actions_are_pinned_to_exact_commits() -> None:
