@@ -49,6 +49,17 @@ DUPES = Counter("telnexa_billing_idempotent_duplicates_total", "Duplicate reques
 ph = PasswordHasher()
 
 
+class AuthenticatedTenant(str):
+    """Tenant identifier carrying the authenticated caller's stable identity."""
+
+    caller_identity: str
+
+    def __new__(cls, tenant_id: str, caller_identity: str):
+        value = str.__new__(cls, tenant_id)
+        value.caller_identity = caller_identity
+        return value
+
+
 @app.middleware("http")
 async def security(request, call_next):
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
@@ -75,7 +86,8 @@ def authn(required="read"):
     ):
         principal = validate_bearer(authorization, x_tenant_id, required)
         if principal:
-            return x_tenant_id
+            subject = principal.get("subject") or principal["account_id"]
+            return AuthenticatedTenant(x_tenant_id, f"oidc:{subject}")
         if not x_api_key:
             raise HTTPException(401, "authentication_required")
         row = db.scalar(
@@ -101,7 +113,7 @@ def authn(required="read"):
             raise HTTPException(403, "insufficient_scope")
         row.last_used_at = datetime.now(timezone.utc)
         db.commit()
-        return x_tenant_id
+        return AuthenticatedTenant(x_tenant_id, f"api-key:{row.id}")
 
     return dependency
 

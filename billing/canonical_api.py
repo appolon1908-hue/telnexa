@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import secrets
@@ -10,9 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from cryptography.fernet import Fernet, InvalidToken
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from .db import Base, session
@@ -20,6 +24,7 @@ from .models import (
     ApiKey,
     Audit,
     BillingAccount,
+    CommandIdempotency,
     Message,
     MessageEvent,
     PhoneNumber,
@@ -35,6 +40,12 @@ from .models import (
 from .schemas import SendRequest
 
 router = APIRouter(prefix="/api/v1", tags=["Canonical Telnexa API"])
+IDEMPOTENCY_REPLAY_HEADER = {
+    "Idempotency-Replayed": {
+        "description": "True when the durable original result was returned.",
+        "schema": {"type": "string", "enum": ["true", "false"]},
+    }
+}
 
 
 def now() -> datetime:
@@ -102,11 +113,18 @@ def _message_json(item: Message) -> dict[str, Any]:
     return message_json(item)
 
 
-def _audit(s: Session, tenant_id: str, action: str, target: str, correlation_id: str) -> None:
+def _audit(
+    s: Session,
+    tenant_id: str,
+    action: str,
+    target: str,
+    correlation_id: str,
+    actor: str = "tenant_api",
+) -> None:
     s.add(
         Audit(
             tenant_id=tenant_id,
-            actor="tenant_api",
+            actor=actor[:80],
             action=action,
             target=target,
             correlation_id=correlation_id[:36],
@@ -114,6 +132,131 @@ def _audit(s: Session, tenant_id: str, action: str, target: str, correlation_id:
             after={},
         )
     )
+
+
+def _caller_identity(tenant_id: str) -> str:
+    identity = getattr(tenant_id, "caller_identity", "")
+    if not identity:
+        raise HTTPException(500, "authenticated_caller_identity_missing")
+    return identity
+
+
+def _semantic_sha256(
+    resource_id: Optional[str], body: BaseModel, *, partial_update: bool = False
+) -> str:
+    semantic = {
+        "resource_id": resource_id,
+        "request": body.model_dump(mode="json", exclude_unset=partial_update),
+    }
+    return hashlib.sha256(
+        json.dumps(semantic, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _response_fernet() -> Fernet:
+    secret = os.environ.get("BILLING_JWT_SECRET", "")
+    if len(secret) < 32:
+        raise HTTPException(503, "idempotency_response_encryption_unavailable")
+    key = hashlib.sha256(("telnexa-command-idempotency-v1:" + secret).encode()).digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
+def _encrypted_response(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return _response_fernet().encrypt(encoded).decode()
+
+
+def _stored_response(record: CommandIdempotency) -> dict[str, Any]:
+    if record.response_json is not None:
+        return record.response_json
+    if not record.response_ciphertext:
+        raise HTTPException(503, "idempotency_result_incomplete")
+    try:
+        value = _response_fernet().decrypt(record.response_ciphertext.encode())
+        result = json.loads(value)
+    except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(503, "idempotency_result_unavailable")
+    if not isinstance(result, dict):
+        raise HTTPException(503, "idempotency_result_invalid")
+    return result
+
+
+def _existing_command(
+    s: Session,
+    *,
+    tenant_id: str,
+    caller_identity: str,
+    resource: str,
+    action: str,
+    idempotency_key: str,
+    semantic_sha256: str,
+) -> Optional[CommandIdempotency]:
+    record = s.scalar(
+        select(CommandIdempotency).where(
+            CommandIdempotency.tenant_id == tenant_id,
+            CommandIdempotency.caller_identity == caller_identity,
+            CommandIdempotency.resource == resource,
+            CommandIdempotency.action == action,
+            CommandIdempotency.api_version == "v1",
+            CommandIdempotency.idempotency_key == idempotency_key,
+        )
+    )
+    if record is not None and record.semantic_sha256 != semantic_sha256:
+        raise HTTPException(409, "idempotency_key_reused_with_different_request")
+    return record
+
+
+def _command_record(
+    *,
+    tenant_id: str,
+    caller_identity: str,
+    resource: str,
+    action: str,
+    idempotency_key: str,
+    semantic_sha256: str,
+    status_code: int,
+    resource_id: str,
+    response_json: Optional[dict[str, Any]] = None,
+    response_ciphertext: Optional[str] = None,
+) -> CommandIdempotency:
+    return CommandIdempotency(
+        tenant_id=tenant_id,
+        caller_identity=caller_identity,
+        resource=resource,
+        action=action,
+        api_version="v1",
+        idempotency_key=idempotency_key,
+        semantic_sha256=semantic_sha256,
+        status_code=status_code,
+        resource_id=resource_id,
+        response_json=response_json,
+        response_ciphertext=response_ciphertext,
+    )
+
+
+def _replay_after_conflict(
+    s: Session,
+    *,
+    tenant_id: str,
+    caller_identity: str,
+    resource: str,
+    action: str,
+    idempotency_key: str,
+    semantic_sha256: str,
+) -> dict[str, Any]:
+    s.rollback()
+    record = _existing_command(
+        s,
+        tenant_id=tenant_id,
+        caller_identity=caller_identity,
+        resource=resource,
+        action=action,
+        idempotency_key=idempotency_key,
+        semantic_sha256=semantic_sha256,
+    )
+    if record is None:
+        raise HTTPException(409, "command_conflict")
+    return _stored_response(record)
 
 
 @router.get("/me")
@@ -396,14 +539,40 @@ def smpp_accounts(
     }
 
 
-@router.post("/smpp/accounts", status_code=201)
+@router.post(
+    "/smpp/accounts",
+    status_code=201,
+    responses={201: {"headers": IDEMPOTENCY_REPLAY_HEADER}},
+)
 def smpp_create(
-    body: SmppIn, tenant_id: str = Depends(_auth("admin")), s: Session = Depends(session)
+    body: SmppIn,
+    response: Response,
+    idempotency_key: str = Header(..., min_length=8, max_length=180, pattern=r"^[A-Za-z0-9._:-]+$"),
+    x_correlation_id: str = Header(
+        ..., min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    ),
+    tenant_id: str = Depends(_auth("admin")),
+    s: Session = Depends(session),
 ) -> dict[str, Any]:
     from .app import ph
 
+    caller_identity = _caller_identity(tenant_id)
+    semantic_sha256 = _semantic_sha256(None, body)
+    prior = _existing_command(
+        s,
+        tenant_id=tenant_id,
+        caller_identity=caller_identity,
+        resource="smpp_accounts",
+        action="create",
+        idempotency_key=idempotency_key,
+        semantic_sha256=semantic_sha256,
+    )
+    if prior is not None:
+        response.headers["Idempotency-Replayed"] = "true"
+        return _stored_response(prior)
     raw = secrets.token_urlsafe(24)
     item = SmppCredential(
+        id=str(uuid.uuid4()),
         tenant_id=tenant_id,
         system_id=body.system_id,
         password_hash=ph.hash(raw),
@@ -413,11 +582,45 @@ def smpp_create(
         ip_allowlist=body.ip_allowlist,
         enabled=False,
     )
+    result = {"id": item.id, "system_id": item.system_id, "password": raw, "enabled": item.enabled}
     s.add(item)
-    s.flush()
-    _audit(s, tenant_id, "smpp.account.created", item.id, item.id)
-    s.commit()
-    return {"id": item.id, "system_id": item.system_id, "password": raw, "enabled": item.enabled}
+    _audit(
+        s,
+        tenant_id,
+        "smpp.account.created",
+        item.id,
+        x_correlation_id,
+        actor=caller_identity,
+    )
+    s.add(
+        _command_record(
+            tenant_id=tenant_id,
+            caller_identity=caller_identity,
+            resource="smpp_accounts",
+            action="create",
+            idempotency_key=idempotency_key,
+            semantic_sha256=semantic_sha256,
+            status_code=201,
+            resource_id=item.id,
+            response_ciphertext=_encrypted_response(result),
+        )
+    )
+    try:
+        s.commit()
+    except IntegrityError:
+        result = _replay_after_conflict(
+            s,
+            tenant_id=tenant_id,
+            caller_identity=caller_identity,
+            resource="smpp_accounts",
+            action="create",
+            idempotency_key=idempotency_key,
+            semantic_sha256=semantic_sha256,
+        )
+        response.headers["Idempotency-Replayed"] = "true"
+        return result
+    response.headers["Idempotency-Replayed"] = "false"
+    return result
 
 
 @router.get("/smpp/accounts/{account_id}")
@@ -436,19 +639,85 @@ def smpp_detail(
     }
 
 
-@router.patch("/smpp/accounts/{account_id}")
+@router.patch(
+    "/smpp/accounts/{account_id}",
+    responses={200: {"headers": IDEMPOTENCY_REPLAY_HEADER}},
+)
 def smpp_patch(
     account_id: str,
     body: SmppPatch,
+    response: Response,
+    idempotency_key: str = Header(..., min_length=8, max_length=180, pattern=r"^[A-Za-z0-9._:-]+$"),
+    x_correlation_id: str = Header(
+        ..., min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
+    ),
     tenant_id: str = Depends(_auth("admin")),
     s: Session = Depends(session),
 ) -> dict[str, Any]:
+    caller_identity = _caller_identity(tenant_id)
+    semantic_sha256 = _semantic_sha256(account_id, body, partial_update=True)
+    resource = f"smpp_accounts:{account_id}"
+    prior = _existing_command(
+        s,
+        tenant_id=tenant_id,
+        caller_identity=caller_identity,
+        resource=resource,
+        action="update",
+        idempotency_key=idempotency_key,
+        semantic_sha256=semantic_sha256,
+    )
+    if prior is not None:
+        response.headers["Idempotency-Replayed"] = "true"
+        return _stored_response(prior)
     item = _tenant_item(s, SmppCredential, account_id, tenant_id)
     for key, value in body.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
-    _audit(s, tenant_id, "smpp.account.updated", item.id, item.id)
-    s.commit()
-    return smpp_detail(item.id, tenant_id, s)
+    result = {
+        "id": item.id,
+        "system_id": item.system_id,
+        "bind_mode": item.bind_mode,
+        "max_binds": item.max_binds,
+        "tps": item.tps,
+        "ip_allowlist": item.ip_allowlist,
+        "enabled": item.enabled,
+    }
+    _audit(
+        s,
+        tenant_id,
+        "smpp.account.updated",
+        item.id,
+        x_correlation_id,
+        actor=caller_identity,
+    )
+    s.add(
+        _command_record(
+            tenant_id=tenant_id,
+            caller_identity=caller_identity,
+            resource=resource,
+            action="update",
+            idempotency_key=idempotency_key,
+            semantic_sha256=semantic_sha256,
+            status_code=200,
+            resource_id=item.id,
+            response_json=result,
+        )
+    )
+    try:
+        s.commit()
+    except IntegrityError:
+        result = _replay_after_conflict(
+            s,
+            tenant_id=tenant_id,
+            caller_identity=caller_identity,
+            resource=resource,
+            action="update",
+            idempotency_key=idempotency_key,
+            semantic_sha256=semantic_sha256,
+        )
+        response.headers["Idempotency-Replayed"] = "true"
+        return result
+    response.headers["Idempotency-Replayed"] = "false"
+    return result
 
 
 @router.get("/messaging/messages")

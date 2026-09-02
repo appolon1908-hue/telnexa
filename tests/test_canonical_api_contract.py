@@ -86,6 +86,27 @@ def test_schema_is_not_created_during_api_import():
         "CREATE TABLE IF NOT EXISTS service_accounts"
         in Path("billing/migrations/006_full_platform_api.sql").read_text()
     )
+    command_migration = Path("billing/migrations/007_command_idempotency.sql").read_text()
+    assert "CREATE TABLE IF NOT EXISTS command_idempotency" in command_migration
+    assert "uq_command_idempotency_identity" in command_migration
+
+
+def test_smpp_command_headers_are_required_by_openapi():
+    paths = app.openapi()["paths"]
+    for method, path in (
+        ("post", "/api/v1/smpp/accounts"),
+        ("patch", "/api/v1/smpp/accounts/{account_id}"),
+    ):
+        headers = {
+            item["name"]: item
+            for item in paths[path][method]["parameters"]
+            if item["in"] == "header"
+        }
+        assert headers["idempotency-key"]["required"] is True
+        assert headers["x-correlation-id"]["required"] is True
+        status = "201" if method == "post" else "200"
+        response_headers = paths[path][method]["responses"][status]["headers"]
+        assert "Idempotency-Replayed" in response_headers
 
 
 def test_keycloak_realm_requires_mfa_and_security_audit():

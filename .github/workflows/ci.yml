@@ -22,6 +22,20 @@ jobs:
   quality-and-tests:
     name: Exact source quality and tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres@sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168
+        env:
+          POSTGRES_USER: telnexa_ci
+          POSTGRES_PASSWORD: ci-placeholder-only
+          POSTGRES_DB: telnexa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U telnexa_ci -d telnexa_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -46,6 +60,13 @@ jobs:
           python -m ruff check billing tests docker scripts
       - name: Full test suite
         run: python -m pytest -q
+      - name: PostgreSQL migration contract
+        env:
+          BILLING_DATABASE_URL: postgresql+psycopg://telnexa_ci:ci-placeholder-only@127.0.0.1:5432/telnexa_ci
+        run: |
+          python -m billing.migrate
+          python -m billing.migrate
+          python -m scripts.validate_postgres_migrations
       - name: Dependency audit
         run: python -m pip_audit -r billing/requirements.txt --progress-spinner off
       - name: Compose contract
@@ -77,6 +98,20 @@ jobs:
     name: Exact merge-result quality and tests
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres@sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168
+        env:
+          POSTGRES_USER: telnexa_ci
+          POSTGRES_PASSWORD: ci-placeholder-only
+          POSTGRES_DB: telnexa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U telnexa_ci -d telnexa_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -99,6 +134,13 @@ jobs:
           python -m ruff check billing tests docker scripts
           python -m pytest -q
           python -m pip_audit -r billing/requirements.txt --progress-spinner off
+      - name: PostgreSQL merge-result migration contract
+        env:
+          BILLING_DATABASE_URL: postgresql+psycopg://telnexa_ci:ci-placeholder-only@127.0.0.1:5432/telnexa_ci
+        run: |
+          python -m billing.migrate
+          python -m billing.migrate
+          python -m scripts.validate_postgres_migrations
       - name: Compose contract
         env:
           RABBITMQ_USER: ci

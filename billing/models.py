@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     Boolean,
     JSON,
+    Text,
     UniqueConstraint,
     CheckConstraint,
 )
@@ -456,6 +457,39 @@ class SmppCredential(Base):
     tps: Mapped[int] = mapped_column(Integer, default=1)
     ip_allowlist: Mapped[list] = mapped_column(JSON, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CommandIdempotency(Base):
+    __tablename__ = "command_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "caller_identity",
+            "resource",
+            "action",
+            "api_version",
+            "idempotency_key",
+            name="uq_command_idempotency_identity",
+        ),
+        CheckConstraint(
+            "(response_json IS NOT NULL AND response_ciphertext IS NULL) "
+            "OR (response_json IS NULL AND response_ciphertext IS NOT NULL)",
+            name="ck_command_idempotency_response",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    caller_identity: Mapped[str] = mapped_column(String(180))
+    resource: Mapped[str] = mapped_column(String(160))
+    action: Mapped[str] = mapped_column(String(80))
+    api_version: Mapped[str] = mapped_column(String(20))
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    semantic_sha256: Mapped[str] = mapped_column(String(64))
+    status_code: Mapped[int] = mapped_column(Integer)
+    resource_id: Mapped[str | None] = mapped_column(String(36))
+    response_json: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    response_ciphertext: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

@@ -62,6 +62,12 @@ Certbot stores certificates in the `letsencrypt` volume. Renew with the same Cer
 
 Non-secret configuration is versioned under `config/` and `docker/`; deployment secrets are installed as root-owned secret files. The private `telnexa-adapter` Jasmin user is created idempotently with bounded throughput. Middleware never receives those credentials.
 
+SMPP account creation and updates require `Idempotency-Key` and `X-Correlation-ID`.
+The durable identity is tenant + authenticated OIDC subject/API key + resource + action + API
+version + key, and a changed semantic request is rejected with HTTP 409. Creation results contain
+a one-time credential, so the exact result is encrypted at rest before it can be replayed; the
+plaintext credential is never stored in the idempotency table.
+
 Outbound callers use `https://api.telnexa.co/api/v1/messages` with tenant authentication, scope, idempotency key, and correlation ID. The Telnexa adapter alone maps the accepted message to Jasmin parameters and constructs the protected DLR URL at runtime. `https://sms.telnexa.co/send` is retired and returns 410.
 
 Provider onboarding: [docs/ADDING_SMPP_PROVIDER.md](docs/ADDING_SMPP_PROVIDER.md). Customer onboarding: [docs/ADDING_SMS_CUSTOMER.md](docs/ADDING_SMS_CUSTOMER.md).
