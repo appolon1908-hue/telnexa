@@ -52,7 +52,7 @@ def test_quick_start_binds_source_and_requires_immutable_release_images():
     assert "diff --quiet HEAD --" in generator
     assert all(f"{name}=example.invalid/" in example for name in release_images)
     assert "Refusing placeholder images" in start
-    assert 'configured_source=$(sed -n' in start
+    assert "configured_source=$(sed -n" in start
     assert '"${COMPOSE[@]}" up -d --no-build' in start
     assert '"${COMPOSE[@]}" up -d --build' not in start
 

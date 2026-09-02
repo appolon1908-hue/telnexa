@@ -127,9 +127,7 @@ def test_issued_service_account_authenticates_with_its_bounded_scopes():
     )
     assert created.status_code == 201
     credential = created.json()
-    issued_headers = service_headers(
-        tenant, credential["client_id"], credential["client_secret"]
-    )
+    issued_headers = service_headers(tenant, credential["client_id"], credential["client_secret"])
     assert client.get("/api/v1/me", headers=issued_headers).status_code == 200
     assert client.get("/api/v1/audit", headers=issued_headers).status_code == 403
 
@@ -169,9 +167,7 @@ def test_audit_log_requires_explicit_privileged_scope():
     )
     assert privileged.status_code == 201
     credential = privileged.json()
-    audit_headers = service_headers(
-        tenant, credential["client_id"], credential["client_secret"]
-    )
+    audit_headers = service_headers(tenant, credential["client_id"], credential["client_secret"])
     assert client.get("/api/v1/audit", headers=audit_headers).status_code == 200
 
 

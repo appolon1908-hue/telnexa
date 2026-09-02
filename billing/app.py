@@ -121,9 +121,7 @@ def authn(required="read"):
             except VerifyMismatchError:
                 raise HTTPException(401, "invalid_service_account")
             scopes = set(service.scopes.split())
-            if "admin" not in scopes and not scopes.intersection(
-                aliases.get(required, {required})
-            ):
+            if "admin" not in scopes and not scopes.intersection(aliases.get(required, {required})):
                 raise HTTPException(403, "insufficient_scope")
             return AuthenticatedTenant(x_tenant_id, f"service-account:{service.id}")
         if not x_api_key:
