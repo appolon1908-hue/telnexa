@@ -28,6 +28,10 @@ def test_portal_and_api_use_the_local_telnexa_identity_authority():
     assert "clientId=telnexa-portal" in configure
     assert 'update "clients/$portal_client_id"' in configure
     assert "--fields redirectUris,webOrigins" in configure
+    assert "get authentication/required-actions -r telnexa" in configure
+    assert "if grep -qx 'VERIFY_PROFILE'" in configure
+    assert "Expected exactly one Telnexa portal client identity" in configure
+    assert "sed -n '2p'" not in configure
 
 
 def test_tls_certificate_covers_every_configured_public_hostname():

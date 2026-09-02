@@ -4,7 +4,14 @@ server=http://keycloak:8080/auth
 admin_password=$(cat /run/secrets/keycloak_admin_password)
 /opt/keycloak/bin/kcadm.sh config credentials --server "$server" --realm master --user telnexa-bootstrap --password "$admin_password" >/dev/null
 /opt/keycloak/bin/kcadm.sh update users/profile -r telnexa -f /opt/telnexa/user-profile.json
-/opt/keycloak/bin/kcadm.sh update authentication/required-actions/VERIFY_PROFILE -r telnexa -s enabled=false -s defaultAction=false
+required_actions=$(
+  /opt/keycloak/bin/kcadm.sh get authentication/required-actions -r telnexa \
+    --fields alias --format csv --noquotes
+)
+if grep -qx 'VERIFY_PROFILE' <<<"$required_actions"; then
+  /opt/keycloak/bin/kcadm.sh update authentication/required-actions/VERIFY_PROFILE \
+    -r telnexa -s enabled=false -s defaultAction=false
+fi
 /opt/keycloak/bin/kcadm.sh update realms/telnexa \
   -s verifyEmail=true \
   -s bruteForceProtected=true \
@@ -29,11 +36,16 @@ admin_password=$(cat /run/secrets/keycloak_admin_password)
 /opt/keycloak/bin/kcadm.sh update authentication/required-actions/VERIFY_EMAIL \
   -r telnexa -s enabled=true -s defaultAction=true
 
-portal_client_id=$(
+portal_client_rows=$(
   /opt/keycloak/bin/kcadm.sh get clients -r telnexa \
-    -q clientId=telnexa-portal --fields id --format csv --noquotes \
-    | sed -n '2p'
+    -q clientId=telnexa-portal --fields id --format csv --noquotes
 )
+mapfile -t portal_client_ids < <(sed '/^id$/d; /^$/d' <<<"$portal_client_rows")
+if [[ "${#portal_client_ids[@]}" -ne 1 ]]; then
+  echo "Expected exactly one Telnexa portal client identity" >&2
+  exit 1
+fi
+portal_client_id=${portal_client_ids[0]}
 case "$portal_client_id" in
   "" | *[!A-Za-z0-9-]*)
     echo "Telnexa portal client identity is missing or invalid" >&2
