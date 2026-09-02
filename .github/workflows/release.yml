@@ -17,11 +17,26 @@ concurrency:
 
 jobs:
   test-build-scan-publish:
+    name: Release ${{ matrix.name }}
     if: github.ref == 'refs/heads/main' && github.ref_protected == true
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: billing
+            dockerfile: billing/Dockerfile
+          - name: keycloak
+            dockerfile: docker/keycloak/Dockerfile
+          - name: jasmin
+            dockerfile: docker/jasmin/Dockerfile
+          - name: webhook-relay
+            dockerfile: docker/webhook-relay/Dockerfile
+          - name: nginx
+            dockerfile: docker/nginx/Dockerfile
     env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/telnexa-billing
+      IMAGE: ghcr.io/${{ github.repository_owner }}/telnexa-${{ matrix.name }}
       SOURCE_SHA: ${{ github.sha }}
       TRIVY_IMAGE: aquasec/trivy@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
       SYFT_IMAGE: anchore/syft@sha256:f94e5d9fce1f2278491a8e3a63bd5f6ddb81fdfdbb8bf7a1637565c1d5344357
@@ -52,8 +67,9 @@ jobs:
             git --redact --no-banner /repo
 
       - name: Run automated tests against the exact image source
+        if: matrix.name == 'billing'
         run: |
-          docker build --pull --build-arg SOURCE_COMMIT_SHA="$SOURCE_SHA" -t "telnexa-ci:${SOURCE_SHA}" -f billing/Dockerfile .
+          docker build --pull --build-arg SOURCE_COMMIT_SHA="$SOURCE_SHA" -t "telnexa-ci:${SOURCE_SHA}" -f "${{ matrix.dockerfile }}" .
           docker run --rm -v "$PWD:/src:ro" -w /src --entrypoint pytest \
             "telnexa-ci:${SOURCE_SHA}" -q
 
@@ -74,7 +90,7 @@ jobs:
           SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
         with:
           context: .
-          file: billing/Dockerfile
+          file: ${{ matrix.dockerfile }}
           build-args: SOURCE_COMMIT_SHA=${{ env.SOURCE_SHA }}
           push: true
           tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
@@ -90,9 +106,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           test -n "$CANDIDATE_DIGEST"
+          exact_image="${IMAGE}@${CANDIDATE_DIGEST}"
+          docker pull "$exact_image"
+          test "$(docker image inspect "$exact_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SOURCE_SHA"
           docker run --rm -v "$HOME/.docker:/root/.docker:ro" "$TRIVY_IMAGE" image \
             --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL \
-            "${IMAGE}@${CANDIDATE_DIGEST}"
+            "$exact_image"
 
       - name: Generate exact-digest SBOM and archive evidence
         env:
@@ -184,7 +203,7 @@ jobs:
       - name: Upload certification evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: telnexa-release-${{ github.sha }}
+          name: telnexa-${{ matrix.name }}-release-${{ github.sha }}
           if-no-files-found: error
           retention-days: 90
           path: |
