@@ -20,9 +20,23 @@ def test_jasmin_image_applies_restart_durability_patch():
     assert "harden_durability.py" in dockerfile
     assert "python /tmp/telnexa-harden-jasmin-durability.py" in dockerfile
     assert "USER jasmin" in dockerfile
+    assert "python:3.12-alpine@sha256:d09d15e60962" in dockerfile
+    assert "0aac58e466d583d0f0436df7b8afa3dc96191263" in dockerfile
+    assert (
+        "--checksum=sha256:3024b111c93ecbf0b1873f0803cd00e8791354d2ac79bff65d071cb1361f574a"
+        in dockerfile
+    )
+    assert "--require-hashes -r /build/requirements.lock" in dockerfile
     jasmin_service = compose.split("  jasmin:\n", 1)[1].split("\n  webhook-relay:", 1)[0]
     assert "read_only: true" in jasmin_service
     assert "/tmp:rw,noexec,nosuid,nodev,mode=1777,size=64m" in jasmin_service
+
+
+def test_jasmin_entrypoint_uses_shell_available_in_minimal_alpine_runtime():
+    entrypoint = (ROOT / "docker/jasmin/entrypoint.sh").read_text(encoding="utf-8")
+
+    assert entrypoint.startswith("#!/bin/sh\nset -eu\n")
+    assert "bash" not in entrypoint
 
 
 def test_jasmin_patch_makes_topology_and_messages_durable(tmp_path):

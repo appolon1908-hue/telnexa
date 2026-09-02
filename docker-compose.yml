@@ -123,7 +123,8 @@ services:
       context: .
       dockerfile: docker/jasmin/Dockerfile
       args:
-        JASMIN_IMAGE: ${JASMIN_IMAGE:-jookies/jasmin:0.11.0@sha256:3f049692d22fd66ab08a55073f79db96fe442473ede9615e8ac085ac505a1064}
+        PYTHON_IMAGE: ${JASMIN_PYTHON_IMAGE:-python:3.12-alpine@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31}
+        JASMIN_SOURCE_SHA: ${JASMIN_SOURCE_SHA:-0aac58e466d583d0f0436df7b8afa3dc96191263}
         SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'
     image: '${TELNEXA_JASMIN_IMAGE:?set an immutable Jasmin image containing @sha256}'
     restart: unless-stopped
