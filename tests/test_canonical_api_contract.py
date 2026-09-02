@@ -1,4 +1,5 @@
 import datetime
+from collections import Counter
 from pathlib import Path
 
 from openapi_spec_validator import validate
@@ -53,14 +54,30 @@ def test_required_canonical_telnexa_routes_are_documented():
         ("get", "/v1/audit"),
         ("get", "/v1/admin/health"),
     }
+    required = {(method, f"/api{path}") for method, path in required}
     missing = sorted(
         f"{method.upper()} {path}" for method, path in required if method not in paths.get(path, {})
     )
     assert missing == []
+    assert not [path for path in paths if path == "/v1" or path.startswith("/v1/")]
 
 
 def test_canonical_openapi_is_structurally_valid():
     validate(app.openapi())
+
+
+def test_runtime_has_one_handler_per_method_and_path():
+    operations = []
+    for outer_route in app.routes:
+        included = getattr(getattr(outer_route, "original_router", None), "routes", None)
+        for route in included or [outer_route]:
+            operations.extend(
+                (method, route.path)
+                for method in getattr(route, "methods", set())
+                if method not in {"HEAD", "OPTIONS"}
+            )
+    duplicates = sorted(operation for operation, count in Counter(operations).items() if count > 1)
+    assert duplicates == []
 
 
 def test_schema_is_not_created_during_api_import():

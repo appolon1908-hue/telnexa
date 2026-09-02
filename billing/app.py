@@ -562,7 +562,9 @@ def create_key(tenant_id: str, x_admin_token: str = Header(...), db: Session = D
 
 
 @app.delete("/api/v1/api-keys/{key_id}")
-def revoke_key(key_id: str, tenant_id: str = Depends(authn()), db: Session = Depends(session)):
+def revoke_key(
+    key_id: str, tenant_id: str = Depends(authn("admin")), db: Session = Depends(session)
+):
     row = db.scalar(select(ApiKey).where(ApiKey.id == key_id, ApiKey.tenant_id == tenant_id))
     if not row:
         raise HTTPException(404, "api_key_not_found")

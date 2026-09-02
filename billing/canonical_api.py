@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
@@ -20,7 +20,6 @@ from .models import (
     ApiKey,
     Audit,
     BillingAccount,
-    Invoice,
     Message,
     MessageEvent,
     PhoneNumber,
@@ -32,11 +31,10 @@ from .models import (
     SmsProviderEventInbox,
     SmsReconciliationCase,
     Tenant,
-    Usage,
 )
 from .schemas import SendRequest
 
-router = APIRouter(prefix="/v1", tags=["Canonical Telnexa API"])
+router = APIRouter(prefix="/api/v1", tags=["Canonical Telnexa API"])
 
 
 def now() -> datetime:
@@ -250,17 +248,6 @@ def api_key_create(
     _audit(s, tenant_id, "api_key.created", item.id, item.id)
     s.commit()
     return {"id": item.id, "api_key": raw, "prefix": item.prefix, "scopes": item.scopes.split()}
-
-
-@router.delete("/api-keys/{key_id}", status_code=204)
-def api_key_delete(
-    key_id: str, tenant_id: str = Depends(_auth("admin")), s: Session = Depends(session)
-) -> Response:
-    item = _tenant_item(s, ApiKey, key_id, tenant_id)
-    item.revoked = True
-    _audit(s, tenant_id, "api_key.revoked", item.id, item.id)
-    s.commit()
-    return Response(status_code=204)
 
 
 @router.post("/sms/messages", status_code=202)
@@ -505,38 +492,6 @@ def billing_account(tenant_id: str = Depends(_auth()), s: Session = Depends(sess
     if item is None:
         raise HTTPException(404, "billing_account_not_found")
     return item
-
-
-@router.get("/billing/usage")
-def billing_usage(
-    tenant_id: str = Depends(_auth()), s: Session = Depends(session)
-) -> dict[str, Any]:
-    return {
-        "items": s.scalars(
-            select(Usage)
-            .where(Usage.tenant_id == tenant_id)
-            .order_by(Usage.created_at.desc())
-            .limit(500)
-        ).all()
-    }
-
-
-@router.get("/billing/invoices")
-def billing_invoices(
-    tenant_id: str = Depends(_auth()), s: Session = Depends(session)
-) -> dict[str, Any]:
-    return {
-        "items": s.scalars(
-            select(Invoice)
-            .where(Invoice.tenant_id == tenant_id)
-            .order_by(Invoice.period_start.desc())
-        ).all()
-    }
-
-
-@router.get("/usage")
-def usage(tenant_id: str = Depends(_auth()), s: Session = Depends(session)) -> dict[str, Any]:
-    return billing_usage(tenant_id, s)
 
 
 async def _ingest_provider_webhook(request: Request, provider: str, s: Session) -> dict[str, Any]:
