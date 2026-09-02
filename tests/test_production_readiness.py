@@ -169,9 +169,7 @@ def test_backup_restore_verifies_integrity_and_never_builds_on_server():
     assert "--decrypt" in restore
     assert 'stat -f -c %T "$staging_root"' in restore
     assert 'tar -xzf "$backup/repository-config.tar.gz"' not in restore
-    assert (
-        "jasmin-config.tar.gz redis-data.tar.gz" in restore
-    )
+    assert "jasmin-config.tar.gz redis-data.tar.gz" in restore
     assert 'test -f "$archive" || continue' not in restore
     assert 'tar -xzf "$backup/runtime-secrets.tar.gz"' in restore
     assert 'tar -xzf "$backup/runtime-mtls.tar.gz"' in restore
