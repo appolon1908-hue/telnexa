@@ -29,7 +29,6 @@ def test_release_dependencies_are_immutable() -> None:
         "docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9",
         "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
         "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6",
-        "actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a",
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ):
         assert action in WORKFLOW
@@ -95,9 +94,23 @@ def test_release_is_retry_safe_and_attestation_is_verified() -> None:
     assert "echo 'exists=true' >> \"$GITHUB_OUTPUT\"" in WORKFLOW
     assert "cosign sign --yes" in WORKFLOW
     assert "cosign verify" in WORKFLOW
+    assert "cosign attest --yes --type slsaprovenance1" in WORKFLOW
+    assert "cosign attest --yes --type spdxjson" in WORKFLOW
+    assert "cosign verify-attestation --type slsaprovenance1" in WORKFLOW
+    assert "cosign verify-attestation --type spdxjson" in WORKFLOW
+    assert "sourceCommit == $source" in WORKFLOW
+    assert "registryDigest == $digest" in WORKFLOW
     assert "--certificate-identity" in WORKFLOW
     assert "--certificate-oidc-issuer" in WORKFLOW
     assert "sha256sum -c SHA256SUMS" in WORKFLOW
+
+
+def test_private_repository_release_uses_registry_native_attestations() -> None:
+    assert "actions/attest-build-provenance" not in WORKFLOW
+    assert "attestations: write" not in WORKFLOW
+    assert "push-to-registry" not in WORKFLOW
+    assert "provenance.json" in WORKFLOW
+    assert "sbom.spdx.json" in WORKFLOW
 
 
 def test_release_workflow_has_no_runtime_deployment_or_delivery_action() -> None:
