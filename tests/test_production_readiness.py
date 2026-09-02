@@ -4,10 +4,16 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def test_portal_can_reach_only_the_canonical_identity_origin():
+def test_portal_and_api_use_the_local_telnexa_identity_authority():
     source = (ROOT / "billing/app.py").read_text()
-    assert "connect-src 'self' https://auth.codestra.co" in source
-    assert "https://auth.codestra.agency" not in source
+    oidc = (ROOT / "billing/oidc.py").read_text()
+    compose = (ROOT / "docker-compose.yml").read_text()
+    assert "connect-src 'self';" in source
+    assert "const issuer='/auth/realms/telnexa'" in source
+    assert "https://auth.codestra.co" not in source
+    assert "https://api.telnexa.co/auth/realms/telnexa" in oidc
+    assert "http://keycloak:8080/auth/realms/telnexa/protocol/openid-connect/certs" in oidc
+    assert "keycloak-configure: {condition: service_completed_successfully}" in compose
 
 
 def test_prometheus_uses_private_metrics_credential():

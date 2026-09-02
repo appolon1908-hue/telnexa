@@ -9,6 +9,15 @@ permissions:
   contents: read
   pull-requests: read
 
+env:
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  TELNEXA_KEYCLOAK_IMAGE: telnexa/keycloak@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  TELNEXA_JASMIN_IMAGE: telnexa/jasmin@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  TELNEXA_WEBHOOK_RELAY_IMAGE: telnexa/webhook-relay@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  TELNEXA_NGINX_IMAGE: telnexa/nginx@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  TELNEXA_BILLING_IMAGE: telnexa/billing@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  TELNEXA_GRAFANA_IMAGE: grafana/grafana@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+
 jobs:
   quality-and-tests:
     name: Exact source quality and tests
@@ -30,7 +39,7 @@ jobs:
       - name: Install exact test and quality dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r billing/requirements.txt ruff pip-audit
+          python -m pip install -r billing/requirements.txt ruff pip-audit openapi-spec-validator
       - name: Full format and lint gate
         run: |
           python -m ruff format --check billing tests
@@ -61,7 +70,7 @@ jobs:
         run: docker compose config --quiet
       - name: Non-root container build
         run: |
-          docker build -f billing/Dockerfile -t telnexa-ci:${GITHUB_SHA} .
+          docker build --build-arg SOURCE_COMMIT_SHA="$SOURCE_SHA" -f billing/Dockerfile -t telnexa-ci:${GITHUB_SHA} .
           test "$(docker image inspect telnexa-ci:${GITHUB_SHA} --format '{{.Config.User}}')" != "root"
 
   merge-result-quality-and-tests:
@@ -83,7 +92,7 @@ jobs:
       - name: Install exact test and quality dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r billing/requirements.txt ruff pip-audit
+          python -m pip install -r billing/requirements.txt ruff pip-audit openapi-spec-validator
       - name: Full merge-result gate
         run: |
           python -m ruff format --check billing tests
@@ -112,7 +121,7 @@ jobs:
         run: docker compose config --quiet
       - name: Non-root merge-result container build
         run: |
-          docker build -f billing/Dockerfile -t telnexa-merge-ci:${GITHUB_SHA} .
+          docker build --build-arg SOURCE_COMMIT_SHA="$SOURCE_SHA" -f billing/Dockerfile -t telnexa-merge-ci:${GITHUB_SHA} .
           test "$(docker image inspect telnexa-merge-ci:${GITHUB_SHA} --format '{{.Config.User}}')" != "root"
 
   secret-scan:

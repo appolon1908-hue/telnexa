@@ -51,7 +51,10 @@ def build_provider_service() -> SmsProviderService:
     )
     _, session_factory = create_session_factory(
         database_url,
-        create_schema=_boolean("TELNEXA_SMS_AUTO_CREATE_SCHEMA", True),
+        # Production must be migrated by the dedicated, reviewable migration
+        # job.  Tests that need a disposable schema opt in explicitly through
+        # create_session_factory(..., create_schema=True).
+        create_schema=_boolean("TELNEXA_SMS_AUTO_CREATE_SCHEMA", False),
     )
     mode = os.environ.get("TELNEXA_JASMIN_TRANSPORT", "disabled")
     if mode == "disabled":

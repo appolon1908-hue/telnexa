@@ -53,7 +53,7 @@ jobs:
 
       - name: Run automated tests against the exact image source
         run: |
-          docker build --pull -t "telnexa-ci:${SOURCE_SHA}" -f billing/Dockerfile .
+          docker build --pull --build-arg SOURCE_COMMIT_SHA="$SOURCE_SHA" -t "telnexa-ci:${SOURCE_SHA}" -f billing/Dockerfile .
           docker run --rm -v "$PWD:/src:ro" -w /src --entrypoint pytest \
             "telnexa-ci:${SOURCE_SHA}" -q
 
@@ -75,6 +75,7 @@ jobs:
         with:
           context: .
           file: billing/Dockerfile
+          build-args: SOURCE_COMMIT_SHA=${{ env.SOURCE_SHA }}
           push: true
           tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
           labels: |

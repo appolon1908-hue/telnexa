@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
-from .db import Base, SessionLocal, engine, session
+from .db import SessionLocal, session
 from .models import (
     ApiKey,
     Audit,
@@ -44,7 +44,6 @@ app = FastAPI(
     docs_url="/developer/openapi",
     openapi_url="/api/v1/openapi.json",
 )
-Base.metadata.create_all(engine)
 SENDS = Counter("telnexa_billing_sends_total", "Billing sends", ["status"])
 DUPES = Counter("telnexa_billing_idempotent_duplicates_total", "Duplicate requests")
 ph = PasswordHasher()
@@ -60,7 +59,7 @@ async def security(request, call_next):
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "same-origin",
-            "Content-Security-Policy": "default-src 'self'; connect-src 'self' https://auth.codestra.co; style-src 'self' 'unsafe-inline'",
+            "Content-Security-Policy": "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'",
             "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
         }
     )
@@ -636,10 +635,6 @@ def portal_js():
         media_type="application/javascript",
         headers={"Cache-Control": "no-store"},
     )
-    response.body = response.body.replace(
-        b"/auth/realms/telnexa", b"https://auth.codestra.co/realms/codestra"
-    )
-    response.headers["Content-Length"] = str(len(response.body))
     return response
 
 
@@ -704,3 +699,6 @@ from .auth_api import router as auth_router
 
 app.include_router(product_router)
 app.include_router(auth_router)
+from .canonical_api import router as canonical_router
+
+app.include_router(canonical_router)

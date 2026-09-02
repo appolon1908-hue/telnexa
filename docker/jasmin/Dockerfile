@@ -1,5 +1,10 @@
 ARG JASMIN_IMAGE=jookies/jasmin:0.11.0@sha256:3f049692d22fd66ab08a55073f79db96fe442473ede9615e8ac085ac505a1064
 FROM ${JASMIN_IMAGE}
+ARG SOURCE_COMMIT_SHA
+RUN test "$(printf '%s' "$SOURCE_COMMIT_SHA" | wc -c)" -eq 40 \
+    && case "$SOURCE_COMMIT_SHA" in *[!0-9a-f]*) exit 1 ;; *) : ;; esac
+LABEL org.opencontainers.image.source="https://github.com/appolon1908-hue/telnexa" \
+      org.opencontainers.image.revision="$SOURCE_COMMIT_SHA"
 
 USER root
 RUN cp -a /etc/jasmin /opt/telnexa-default-config

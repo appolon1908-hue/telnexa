@@ -29,8 +29,8 @@ services:
       retries: 10
 
   keycloak:
-    build: {context: ., dockerfile: docker/keycloak/Dockerfile}
-    image: telnexa/keycloak:26.6.3
+    build: {context: ., dockerfile: docker/keycloak/Dockerfile, args: {SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'}}
+    image: '${TELNEXA_KEYCLOAK_IMAGE:?set an immutable Keycloak image containing @sha256}'
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     entrypoint: ["/bin/bash","-ec"]
@@ -65,7 +65,7 @@ services:
     cpus: 2
 
   keycloak-configure:
-    image: telnexa/keycloak:26.6.3
+    image: '${TELNEXA_KEYCLOAK_IMAGE:?set an immutable Keycloak image containing @sha256}'
     restart: "no"
     entrypoint: ["/opt/telnexa/keycloak-configure.sh"]
     secrets: [keycloak_admin_password]
@@ -124,7 +124,8 @@ services:
       dockerfile: docker/jasmin/Dockerfile
       args:
         JASMIN_IMAGE: ${JASMIN_IMAGE:-jookies/jasmin:0.11.0@sha256:3f049692d22fd66ab08a55073f79db96fe442473ede9615e8ac085ac505a1064}
-    image: telnexa/jasmin:${TELNEXA_IMAGE_TAG:-local}
+        SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'
+    image: '${TELNEXA_JASMIN_IMAGE:?set an immutable Jasmin image containing @sha256}'
     restart: unless-stopped
     <<: *default-security
     depends_on:
@@ -164,7 +165,8 @@ services:
     build:
       context: .
       dockerfile: docker/webhook-relay/Dockerfile
-    image: telnexa/webhook-relay:${TELNEXA_IMAGE_TAG:-local}
+      args: {SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'}
+    image: '${TELNEXA_WEBHOOK_RELAY_IMAGE:?set an immutable webhook relay image containing @sha256}'
     restart: unless-stopped
     <<: *default-security
     environment:
@@ -190,7 +192,8 @@ services:
     build:
       context: .
       dockerfile: docker/nginx/Dockerfile
-    image: telnexa/nginx:${TELNEXA_IMAGE_TAG:-local}
+      args: {SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'}
+    image: '${TELNEXA_NGINX_IMAGE:?set an immutable Nginx image containing @sha256}'
     restart: unless-stopped
     <<: *default-security
     depends_on:
@@ -237,8 +240,8 @@ services:
     cpus: 2
 
   billing-migrate:
-    build: {context: ., dockerfile: billing/Dockerfile}
-    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    build: {context: ., dockerfile: billing/Dockerfile, args: {SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'}}
+    image: '${TELNEXA_BILLING_IMAGE:?set an immutable billing image containing @sha256}'
     command: ["python", "-m", "billing.migrate"]
     restart: "no"
     environment: &billing-environment
@@ -252,10 +255,11 @@ services:
       TELNEXA_PRODUCTION_SMS_ENABLED: "false"
       TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE: /run/secrets/provider_event_hmac
       TELNEXA_DLR_RELAY_URL: http://webhook-relay:8080
-      OIDC_ISSUER: https://auth.codestra.co/realms/codestra
-      OIDC_AUDIENCE: codestra-api
+      OIDC_ISSUER: https://api.telnexa.co/auth/realms/telnexa
+      OIDC_JWKS_URL: http://keycloak:8080/auth/realms/telnexa/protocol/openid-connect/certs
+      OIDC_AUDIENCE: telnexa-api
       OIDC_ALLOWED_AZP: ${OIDC_ALLOWED_AZP:?set approved Codestra client identities}
-      SOURCE_SHA: ${SOURCE_SHA:-uncommitted}
+      SOURCE_SHA: ${SOURCE_SHA:?set exact 40-character source SHA}
       LIVE_SMS_DELIVERY: "false"
       LIVE_EMAIL_DELIVERY: "false"
       LIVE_PSTN_DIALING: "false"
@@ -263,8 +267,8 @@ services:
     networks: [billing]
 
   billing-api:
-    build: {context: ., dockerfile: billing/Dockerfile}
-    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    build: {context: ., dockerfile: billing/Dockerfile, args: {SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'}}
+    image: '${TELNEXA_BILLING_IMAGE:?set an immutable billing image containing @sha256}'
     restart: unless-stopped
     <<: *default-security
     environment:
@@ -278,9 +282,10 @@ services:
     depends_on:
       billing-db: {condition: service_healthy}
       billing-migrate: {condition: service_completed_successfully}
+      keycloak-configure: {condition: service_completed_successfully}
     expose: ["8000"]
     ports: ["127.0.0.1:18080:8000"]
-    networks: [billing, edge, public, monitoring]
+    networks: [billing, edge, public, monitoring, identity]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready',timeout=3)"]
       interval: 20s
@@ -293,8 +298,8 @@ services:
     cpus: 2
 
   billing-worker:
-    build: {context: ., dockerfile: billing/Dockerfile}
-    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    build: {context: ., dockerfile: billing/Dockerfile, args: {SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'}}
+    image: '${TELNEXA_BILLING_IMAGE:?set an immutable billing image containing @sha256}'
     command: ["python", "-m", "billing.worker"]
     entrypoint: ["/usr/local/bin/live-gate"]
     volumes:
@@ -313,8 +318,8 @@ services:
     cpus: 1
 
   sms-dispatch-worker:
-    build: {context: ., dockerfile: billing/Dockerfile}
-    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    build: {context: ., dockerfile: billing/Dockerfile, args: {SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'}}
+    image: '${TELNEXA_BILLING_IMAGE:?set an immutable billing image containing @sha256}'
     command: ["python", "-m", "billing.dispatch_worker"]
     entrypoint: ["/usr/local/bin/live-gate"]
     volumes: ["./scripts/live-gate.sh:/usr/local/bin/live-gate:ro"]
@@ -332,8 +337,8 @@ services:
     cap_drop: [ALL]
 
   sms-provider-event-worker:
-    build: {context: ., dockerfile: billing/Dockerfile}
-    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    build: {context: ., dockerfile: billing/Dockerfile, args: {SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'}}
+    image: '${TELNEXA_BILLING_IMAGE:?set an immutable billing image containing @sha256}'
     command: ["python", "-m", "billing.provider_event_worker"]
     entrypoint: ["/usr/local/bin/live-gate"]
     volumes: ["./scripts/live-gate.sh:/usr/local/bin/live-gate:ro"]
@@ -349,8 +354,8 @@ services:
     cap_drop: [ALL]
 
   sms-reconciliation-worker:
-    build: {context: ., dockerfile: billing/Dockerfile}
-    image: telnexa/billing:${TELNEXA_IMAGE_TAG:-local}
+    build: {context: ., dockerfile: billing/Dockerfile, args: {SOURCE_COMMIT_SHA: '${SOURCE_SHA:?set exact 40-character source SHA}'}}
+    image: '${TELNEXA_BILLING_IMAGE:?set an immutable billing image containing @sha256}'
     command: ["python", "-m", "billing.reconciliation_worker"]
     entrypoint: ["/usr/local/bin/live-gate"]
     volumes: ["./scripts/live-gate.sh:/usr/local/bin/live-gate:ro"]
@@ -417,7 +422,7 @@ services:
     cpus: 1
 
   grafana:
-    image: grafana/grafana:12.1.1
+    image: '${TELNEXA_GRAFANA_IMAGE:?set an approved Grafana image containing @sha256}'
     restart: unless-stopped
     <<: *default-security
     environment:
