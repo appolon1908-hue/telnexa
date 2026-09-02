@@ -88,6 +88,9 @@ jobs:
           KEYCLOAK_ADMIN_PASSWORD_FILE: /tmp/ci-keycloak-admin
           KEYCLOAK_DB_PASSWORD_FILE: /tmp/ci-keycloak-db
           TELNEXA_PROVIDER_KEYS_FILE: /tmp/ci-provider-keys
+          TELNEXA_MIDDLEWARE_CA_FILE: /tmp/ci-middleware-ca
+          TELNEXA_MIDDLEWARE_CLIENT_CERT_FILE: /tmp/ci-middleware-client-cert
+          TELNEXA_MIDDLEWARE_CLIENT_KEY_FILE: /tmp/ci-middleware-client-key
         run: docker compose config --quiet
       - name: Non-root container build
         run: |
@@ -160,6 +163,9 @@ jobs:
           KEYCLOAK_ADMIN_PASSWORD_FILE: /tmp/ci-keycloak-admin
           KEYCLOAK_DB_PASSWORD_FILE: /tmp/ci-keycloak-db
           TELNEXA_PROVIDER_KEYS_FILE: /tmp/ci-provider-keys
+          TELNEXA_MIDDLEWARE_CA_FILE: /tmp/ci-middleware-ca
+          TELNEXA_MIDDLEWARE_CLIENT_CERT_FILE: /tmp/ci-middleware-client-cert
+          TELNEXA_MIDDLEWARE_CLIENT_KEY_FILE: /tmp/ci-middleware-client-key
         run: docker compose config --quiet
       - name: Non-root merge-result container build
         run: |

@@ -248,7 +248,7 @@ services:
       BILLING_DATABASE_URL: postgresql+psycopg://${BILLING_DB_USER:-telnexa_billing}:${BILLING_DB_PASSWORD}@billing-db:5432/${BILLING_DB_NAME:-telnexa_billing}
       BILLING_JWT_SECRET: ${BILLING_JWT_SECRET:?set BILLING_JWT_SECRET in .env}
       BILLING_ADMIN_TOKEN: ${BILLING_ADMIN_TOKEN:?set BILLING_ADMIN_TOKEN in .env}
-      BILLING_MIDDLEWARE_URL: ${BILLING_MIDDLEWARE_URL:-https://10.40.0.1/api/v1/events/telnexa}
+      BILLING_MIDDLEWARE_URL: ${BILLING_MIDDLEWARE_URL:-https://middleware.internal.codestra.agency/api/v1/events/telnexa}
       BILLING_MIDDLEWARE_API_KEY: ${BILLING_MIDDLEWARE_API_KEY:?set BILLING_MIDDLEWARE_API_KEY in .env}
       BILLING_MIDDLEWARE_HMAC_SECRET: ${BILLING_MIDDLEWARE_HMAC_SECRET:?set BILLING_MIDDLEWARE_HMAC_SECRET in .env}
       BILLING_SIMULATOR_ENABLED: ${BILLING_SIMULATOR_ENABLED:-true}
@@ -306,7 +306,13 @@ services:
       - ./scripts/live-gate.sh:/usr/local/bin/live-gate:ro
     restart: unless-stopped
     <<: *default-security
-    environment: *billing-environment
+    environment:
+      <<: *billing-environment
+      BILLING_MIDDLEWARE_CA_FILE: /run/secrets/middleware_ca
+      BILLING_MIDDLEWARE_CLIENT_CERT_FILE: /run/secrets/middleware_client_cert
+      BILLING_MIDDLEWARE_CLIENT_KEY_FILE: /run/secrets/middleware_client_key
+    secrets: [middleware_ca,middleware_client_cert,middleware_client_key]
+    extra_hosts: ["middleware.internal.codestra.agency:10.40.0.1"]
     depends_on:
       billing-db: {condition: service_healthy}
       billing-migrate: {condition: service_completed_successfully}
@@ -476,3 +482,6 @@ secrets:
   jasmin_http_username: {file: '${TELNEXA_JASMIN_HTTP_USERNAME_FILE:-/etc/telnexa/secrets/jasmin-http-username}'}
   jasmin_http_password: {file: '${TELNEXA_JASMIN_HTTP_PASSWORD_FILE:-/etc/telnexa/secrets/jasmin-http-password}'}
   jasmin_http_dlr_token: {file: '${TELNEXA_JASMIN_DLR_TOKEN_FILE:-/etc/telnexa/secrets/jasmin-dlr-token}'}
+  middleware_ca: {file: '${TELNEXA_MIDDLEWARE_CA_FILE:?set approved middleware CA file}'}
+  middleware_client_cert: {file: '${TELNEXA_MIDDLEWARE_CLIENT_CERT_FILE:?set Telnexa middleware client certificate file}'}
+  middleware_client_key: {file: '${TELNEXA_MIDDLEWARE_CLIENT_KEY_FILE:?set Telnexa middleware client key file}'}
