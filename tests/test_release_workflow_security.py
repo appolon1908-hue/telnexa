@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/release.yml").read_text()
 CI_WORKFLOW = (ROOT / ".github/workflows/ci.yml").read_text()
+GITLEAKS_IGNORE = (ROOT / ".gitleaksignore").read_text()
 
 
 def test_release_runs_only_from_protected_main() -> None:
@@ -110,3 +111,14 @@ def test_release_workflow_has_no_runtime_deployment_or_delivery_action() -> None
     )
     lowered = WORKFLOW.lower()
     assert all(token not in lowered for token in forbidden)
+
+
+def test_full_history_secret_scan_only_ignores_reviewed_false_positive_fingerprints() -> None:
+    assert "git --redact --no-banner /repo" in WORKFLOW
+    fingerprints = {line for line in GITLEAKS_IGNORE.splitlines() if line}
+    assert fingerprints == {
+        "515b29481dd638f227eadc611c0a7dc2b92acbdd:.github/workflows/step4-format-artifact.yml:generic-api-key:28",
+        "67ec59e447bb73334f1edb7042e937977cf2ec8e:labs/middleware_telnexa/certify.py:generic-api-key:72",
+        "4b4e5c73463df1c03723438d97bffd9b73393b95:docker-compose.yml:generic-api-key:45",
+        "ed555db547bf161123ee6a3277a4262c3c6005e7:DEPLOYMENT_REPORT.md:generic-api-key:54",
+    }
