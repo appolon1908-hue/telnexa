@@ -2,9 +2,25 @@
 set -euo pipefail
 [[ "$EUID" -eq 0 ]] || { echo "Run with sudo so runtime credentials are root-owned." >&2; exit 1; }
 repo=$(cd "$(dirname "$0")/.." && pwd)
+source_sha=$(git -c safe.directory="$repo" -C "$repo" rev-parse HEAD)
+[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve exact source SHA." >&2; exit 1; }
+git -c safe.directory="$repo" -C "$repo" diff --quiet HEAD -- || {
+  echo "Refusing to bind production provenance to a modified tracked worktree." >&2
+  exit 1
+}
 env_file="$repo/.env"
 secret_dir="${TELNEXA_RUNTIME_SECRET_DIR:-/etc/telnexa/secrets}"
+case "$secret_dir" in
+  /etc/telnexa/secrets | /opt/telnexa/secrets) ;;
+  *) echo "Runtime secret directory is outside the approved Telnexa roots" >&2; exit 1 ;;
+esac
 install -d -o root -g root -m 0700 "$secret_dir"
+keycloak_secret_dir="$repo/.secrets"
+install -d -o root -g root -m 0700 "$keycloak_secret_dir"
+for file in keycloak_admin_password keycloak_db_password; do
+  [[ -s "$keycloak_secret_dir/$file" ]] \
+    || openssl rand -base64 36 | install -o root -g root -m 0600 /dev/stdin "$keycloak_secret_dir/$file"
+done
 test -f "$env_file" || cp "$repo/.env.example" "$env_file"
 chmod 0600 "$env_file"
 for key in RABBITMQ_PASSWORD REDIS_PASSWORD JASMIN_ADMIN_PASSWORD JASMIN_API_PASSWORD WEBHOOK_HMAC_SECRET BILLING_DB_PASSWORD BILLING_JWT_SECRET BILLING_ADMIN_TOKEN BILLING_MIDDLEWARE_API_KEY BILLING_MIDDLEWARE_HMAC_SECRET GRAFANA_ADMIN_PASSWORD; do
@@ -56,6 +72,7 @@ set_value TELNEXA_JASMIN_HTTP_USERNAME_FILE "$jasmin_username_file"
 set_value TELNEXA_JASMIN_HTTP_PASSWORD_FILE "$jasmin_password_file"
 set_value TELNEXA_JASMIN_DLR_TOKEN_FILE "$jasmin_dlr_token_file"
 set_value OIDC_ALLOWED_AZP "${OIDC_ALLOWED_AZP:-telnexa-portal}"
+set_value SOURCE_SHA "$source_sha"
 chown root:root "$env_file"
 chmod 0600 "$env_file"
 echo "Generated root-owned runtime credentials and .env without displaying secret values."

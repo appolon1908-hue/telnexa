@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     Boolean,
     JSON,
+    Text,
     UniqueConstraint,
     CheckConstraint,
 )
@@ -236,6 +237,20 @@ class ApiKey(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ServiceAccount(Base):
+    __tablename__ = "service_accounts"
+    __table_args__ = (UniqueConstraint("tenant_id", "client_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    client_id: Mapped[str] = mapped_column(String(120), unique=True)
+    secret_hash: Mapped[str] = mapped_column(String(255))
+    scopes: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Audit(Base):
     __tablename__ = "audit_log"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
@@ -447,6 +462,12 @@ class InboundMessage(Base):
 
 class SmppCredential(Base):
     __tablename__ = "smpp_credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "enabled = false",
+            name="ck_smpp_credentials_runtime_provisioned_before_enable",
+        ),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
     system_id: Mapped[str] = mapped_column(String(32), unique=True)
@@ -456,6 +477,39 @@ class SmppCredential(Base):
     tps: Mapped[int] = mapped_column(Integer, default=1)
     ip_allowlist: Mapped[list] = mapped_column(JSON, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CommandIdempotency(Base):
+    __tablename__ = "command_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "caller_identity",
+            "resource",
+            "action",
+            "api_version",
+            "idempotency_key",
+            name="uq_command_idempotency_identity",
+        ),
+        CheckConstraint(
+            "(response_json IS NOT NULL AND response_ciphertext IS NULL) "
+            "OR (response_json IS NULL AND response_ciphertext IS NOT NULL)",
+            name="ck_command_idempotency_response",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    caller_identity: Mapped[str] = mapped_column(String(180))
+    resource: Mapped[str] = mapped_column(String(160))
+    action: Mapped[str] = mapped_column(String(80))
+    api_version: Mapped[str] = mapped_column(String(20))
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    semantic_sha256: Mapped[str] = mapped_column(String(64))
+    status_code: Mapped[int] = mapped_column(Integer)
+    resource_id: Mapped[str | None] = mapped_column(String(36))
+    response_json: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    response_ciphertext: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

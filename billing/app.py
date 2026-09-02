@@ -1,5 +1,7 @@
 import secrets
 import uuid
+import base64
+import binascii
 import os
 import io
 import csv
@@ -15,7 +17,7 @@ from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
-from .db import Base, SessionLocal, engine, session
+from .db import SessionLocal, session
 from .models import (
     ApiKey,
     Audit,
@@ -26,6 +28,7 @@ from .models import (
     LedgerEntry,
     Message,
     Sender,
+    ServiceAccount,
     Tenant,
     Usage,
     Wallet,
@@ -44,10 +47,20 @@ app = FastAPI(
     docs_url="/developer/openapi",
     openapi_url="/api/v1/openapi.json",
 )
-Base.metadata.create_all(engine)
 SENDS = Counter("telnexa_billing_sends_total", "Billing sends", ["status"])
 DUPES = Counter("telnexa_billing_idempotent_duplicates_total", "Duplicate requests")
 ph = PasswordHasher()
+
+
+class AuthenticatedTenant(str):
+    """Tenant identifier carrying the authenticated caller's stable identity."""
+
+    caller_identity: str
+
+    def __new__(cls, tenant_id: str, caller_identity: str):
+        value = str.__new__(cls, tenant_id)
+        value.caller_identity = caller_identity
+        return value
 
 
 @app.middleware("http")
@@ -60,7 +73,7 @@ async def security(request, call_next):
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "same-origin",
-            "Content-Security-Policy": "default-src 'self'; connect-src 'self' https://auth.codestra.co; style-src 'self' 'unsafe-inline'",
+            "Content-Security-Policy": "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'",
             "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
         }
     )
@@ -76,7 +89,41 @@ def authn(required="read"):
     ):
         principal = validate_bearer(authorization, x_tenant_id, required)
         if principal:
-            return x_tenant_id
+            subject = principal.get("subject") or principal["account_id"]
+            return AuthenticatedTenant(x_tenant_id, f"oidc:{subject}")
+        aliases = {
+            "read": {"read", "sms.read", "billing.read"},
+            "messages:write": {"messages:write", "sms.send"},
+            "bulk:write": {"bulk:write", "sms.bulk"},
+        }
+        if authorization and authorization.startswith("Basic "):
+            try:
+                encoded = authorization[6:]
+                if not encoded or len(encoded) > 512:
+                    raise ValueError("invalid basic credential size")
+                decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+                client_id, separator, client_secret = decoded.partition(":")
+                if not separator or not client_id or not client_secret:
+                    raise ValueError("invalid basic credential")
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                raise HTTPException(401, "invalid_service_account")
+            service = db.scalar(
+                select(ServiceAccount).where(
+                    ServiceAccount.tenant_id == x_tenant_id,
+                    ServiceAccount.client_id == client_id,
+                    ServiceAccount.enabled == True,
+                )
+            )
+            try:
+                if not service:
+                    raise VerifyMismatchError
+                ph.verify(service.secret_hash, client_secret)
+            except VerifyMismatchError:
+                raise HTTPException(401, "invalid_service_account")
+            scopes = set(service.scopes.split())
+            if "admin" not in scopes and not scopes.intersection(aliases.get(required, {required})):
+                raise HTTPException(403, "insufficient_scope")
+            return AuthenticatedTenant(x_tenant_id, f"service-account:{service.id}")
         if not x_api_key:
             raise HTTPException(401, "authentication_required")
         row = db.scalar(
@@ -93,16 +140,11 @@ def authn(required="read"):
         except VerifyMismatchError:
             raise HTTPException(401, "invalid_api_key")
         scopes = set(row.scopes.split())
-        aliases = {
-            "read": {"read", "sms.read", "billing.read"},
-            "messages:write": {"messages:write", "sms.send"},
-            "bulk:write": {"bulk:write", "sms.bulk"},
-        }
         if "admin" not in scopes and not scopes.intersection(aliases.get(required, {required})):
             raise HTTPException(403, "insufficient_scope")
         row.last_used_at = datetime.now(timezone.utc)
         db.commit()
-        return x_tenant_id
+        return AuthenticatedTenant(x_tenant_id, f"api-key:{row.id}")
 
     return dependency
 
@@ -563,7 +605,9 @@ def create_key(tenant_id: str, x_admin_token: str = Header(...), db: Session = D
 
 
 @app.delete("/api/v1/api-keys/{key_id}")
-def revoke_key(key_id: str, tenant_id: str = Depends(authn()), db: Session = Depends(session)):
+def revoke_key(
+    key_id: str, tenant_id: str = Depends(authn("admin")), db: Session = Depends(session)
+):
     row = db.scalar(select(ApiKey).where(ApiKey.id == key_id, ApiKey.tenant_id == tenant_id))
     if not row:
         raise HTTPException(404, "api_key_not_found")
@@ -636,10 +680,6 @@ def portal_js():
         media_type="application/javascript",
         headers={"Cache-Control": "no-store"},
     )
-    response.body = response.body.replace(
-        b"/auth/realms/telnexa", b"https://auth.codestra.co/realms/codestra"
-    )
-    response.headers["Content-Length"] = str(len(response.body))
     return response
 
 
@@ -704,3 +744,6 @@ from .auth_api import router as auth_router
 
 app.include_router(product_router)
 app.include_router(auth_router)
+from .canonical_api import router as canonical_router
+
+app.include_router(canonical_router)

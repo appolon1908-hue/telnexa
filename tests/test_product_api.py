@@ -1,3 +1,4 @@
+import base64
 import os
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -13,6 +14,7 @@ from billing.models import (
     ApiKey,
     AuthToken,
     BillingAccount,
+    CommandIdempotency,
     Contact,
     CountryPolicy,
     Message,
@@ -21,6 +23,7 @@ from billing.models import (
     Rate,
     Route,
     Sender,
+    SmppCredential,
     TeamMember,
     Tenant,
     Wallet,
@@ -107,6 +110,65 @@ def seed(scopes="admin"):
 
 def headers(t, key):
     return {"X-Tenant-ID": t.id, "X-API-Key": key}
+
+
+def service_headers(tenant, client_id, client_secret):
+    encoded = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    return {"X-Tenant-ID": tenant.id, "Authorization": "Basic " + encoded}
+
+
+def test_issued_service_account_authenticates_with_its_bounded_scopes():
+    _db, tenant, _account, key = seed()
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/service-accounts",
+        headers=headers(tenant, key),
+        json={"name": "Read integration", "scopes": ["sms.read"]},
+    )
+    assert created.status_code == 201
+    credential = created.json()
+    issued_headers = service_headers(tenant, credential["client_id"], credential["client_secret"])
+    assert client.get("/api/v1/me", headers=issued_headers).status_code == 200
+    assert client.get("/api/v1/audit", headers=issued_headers).status_code == 403
+
+    invalid_headers = service_headers(
+        tenant, credential["client_id"], "wrong-service-account-secret"
+    )
+    assert client.get("/api/v1/me", headers=invalid_headers).status_code == 401
+
+
+def test_audit_log_requires_explicit_privileged_scope():
+    _db, tenant, _account, read_key = seed(scopes="sms.read")
+    client = TestClient(app)
+    assert client.get("/api/v1/audit", headers=headers(tenant, read_key)).status_code == 403
+
+    privileged = client.post(
+        "/api/v1/service-accounts",
+        headers={**headers(tenant, read_key), "X-API-Key": read_key},
+        json={"name": "Audit integration", "scopes": ["audit:read"]},
+    )
+    assert privileged.status_code == 403
+
+    db = SessionLocal()
+    admin_raw = "tnx_" + "b" * 32
+    db.add(
+        ApiKey(
+            tenant_id=tenant.id,
+            prefix=admin_raw[:12],
+            secret_hash=ph.hash(admin_raw),
+            scopes="admin",
+        )
+    )
+    db.commit()
+    privileged = client.post(
+        "/api/v1/service-accounts",
+        headers=headers(tenant, admin_raw),
+        json={"name": "Audit integration", "scopes": ["audit:read"]},
+    )
+    assert privileged.status_code == 201
+    credential = privileged.json()
+    audit_headers = service_headers(tenant, credential["client_id"], credential["client_secret"])
+    assert client.get("/api/v1/audit", headers=audit_headers).status_code == 200
 
 
 def test_contact_consent_sender_and_campaign_guardrails():
@@ -204,6 +266,110 @@ def test_missing_sender_and_changed_idempotency_payload_are_denied():
         c.post("/api/v1/messages", headers=h, json={**body, "content": "changed"}).status_code
         == 409
     )
+
+
+def test_smpp_mutations_have_durable_caller_scoped_idempotency():
+    db, tenant, _account, key = seed()
+    client = TestClient(app)
+    create_headers = {
+        **headers(tenant, key),
+        "Idempotency-Key": "smpp-create-0001",
+        "X-Correlation-ID": "corr-smpp-create-0001",
+    }
+    body = {"system_id": "tenant-primary", "tps": 25, "max_binds": 2}
+
+    first = client.post("/api/v1/smpp/accounts", headers=create_headers, json=body)
+    assert first.status_code == 201
+    assert first.headers["Idempotency-Replayed"] == "false"
+    assert first.json()["password"]
+
+    replay = client.post("/api/v1/smpp/accounts", headers=create_headers, json=body)
+    assert replay.status_code == 201
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    assert replay.json() == first.json()
+    assert (
+        client.post(
+            "/api/v1/smpp/accounts",
+            headers=create_headers,
+            json={**body, "tps": 26},
+        ).status_code
+        == 409
+    )
+
+    db.rollback()
+    record = db.query(CommandIdempotency).one()
+    assert record.caller_identity.startswith("api-key:")
+    assert record.response_json is None
+    assert first.json()["password"] not in record.response_ciphertext
+    assert db.query(SmppCredential).count() == 1
+
+    account_id = first.json()["id"]
+    patch_headers = {
+        **headers(tenant, key),
+        "Idempotency-Key": "smpp-update-0001",
+        "X-Correlation-ID": "corr-smpp-update-0001",
+    }
+    updated = client.patch(
+        f"/api/v1/smpp/accounts/{account_id}", headers=patch_headers, json={"tps": 30}
+    )
+    assert updated.status_code == 200
+    assert updated.headers["Idempotency-Replayed"] == "false"
+    assert updated.json()["tps"] == 30
+    enable_denied = client.patch(
+        f"/api/v1/smpp/accounts/{account_id}",
+        headers={
+            **headers(tenant, key),
+            "Idempotency-Key": "smpp-enable-0001",
+            "X-Correlation-ID": "corr-smpp-enable-0001",
+        },
+        json={"enabled": True},
+    )
+    assert enable_denied.status_code == 409
+    assert enable_denied.json()["detail"] == "smpp_runtime_provisioning_required"
+    db.expire_all()
+    assert db.get(SmppCredential, account_id).enabled is False
+    replayed_update = client.patch(
+        f"/api/v1/smpp/accounts/{account_id}", headers=patch_headers, json={"tps": 30}
+    )
+    assert replayed_update.headers["Idempotency-Replayed"] == "true"
+    assert replayed_update.json() == updated.json()
+    assert (
+        client.patch(
+            f"/api/v1/smpp/accounts/{account_id}",
+            headers=patch_headers,
+            json={"tps": 31},
+        ).status_code
+        == 409
+    )
+
+    missing_key = client.patch(
+        f"/api/v1/smpp/accounts/{account_id}",
+        headers={**headers(tenant, key), "X-Correlation-ID": "corr-smpp-missing-key"},
+        json={"tps": 40},
+    )
+    assert missing_key.status_code == 422
+
+    second_key = "tnx_" + "b" * 32
+    db.add(
+        ApiKey(
+            tenant_id=tenant.id,
+            prefix=second_key[:12],
+            secret_hash=ph.hash(second_key),
+            scopes="admin",
+        )
+    )
+    db.commit()
+    second_caller = client.post(
+        "/api/v1/smpp/accounts",
+        headers={
+            **headers(tenant, second_key),
+            "Idempotency-Key": "smpp-create-0001",
+            "X-Correlation-ID": "corr-smpp-create-0002",
+        },
+        json={**body, "system_id": "tenant-secondary"},
+    )
+    assert second_caller.status_code == 201
+    assert second_caller.headers["Idempotency-Replayed"] == "false"
 
 
 def test_simulator_mo_stop_help_and_deduplication():
