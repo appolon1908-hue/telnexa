@@ -5,7 +5,10 @@ RUN test "$(printf '%s' "$SOURCE_COMMIT_SHA" | wc -c)" -eq 40 \
 LABEL org.opencontainers.image.source="https://github.com/appolon1908-hue/telnexa" \
       org.opencontainers.image.revision="$SOURCE_COMMIT_SHA" \
       org.opencontainers.image.version="$SOURCE_COMMIT_SHA"
-RUN addgroup -S relay && adduser -S -G relay relay
+RUN apk upgrade --no-cache \
+    && python -m pip uninstall -y pip setuptools msgpack \
+    && addgroup -S relay \
+    && adduser -S -G relay relay
 COPY docker/webhook-relay/server.py /app/server.py
 USER relay
 EXPOSE 8080

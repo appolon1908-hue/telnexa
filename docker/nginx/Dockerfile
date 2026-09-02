@@ -5,6 +5,8 @@ RUN test "$(printf '%s' "$SOURCE_COMMIT_SHA" | wc -c)" -eq 40 \
 LABEL org.opencontainers.image.source="https://github.com/appolon1908-hue/telnexa" \
       org.opencontainers.image.revision="$SOURCE_COMMIT_SHA" \
       org.opencontainers.image.version="$SOURCE_COMMIT_SHA"
+USER 0
+RUN apk upgrade --no-cache
 COPY --chown=101:0 docker/nginx/http.conf.template /opt/telnexa/http.conf.template
 COPY --chown=101:0 docker/nginx/tls.conf.template /opt/telnexa/tls.conf.template
 COPY --chown=101:0 --chmod=0755 docker/nginx/entrypoint.sh /docker-entrypoint.d/05-telnexa-config.sh
