@@ -57,6 +57,19 @@ def test_quick_start_binds_source_and_requires_immutable_release_images():
     assert '"${COMPOSE[@]}" up -d --build' not in start
 
 
+def test_backup_restore_verifies_integrity_and_never_builds_on_server():
+    backup = (ROOT / "scripts/backup.sh").read_text()
+    restore = (ROOT / "scripts/restore.sh").read_text()
+
+    assert "xargs -0 sha256sum > SHA256SUMS" in backup
+    assert "sha256sum --check SHA256SUMS" in backup
+    assert 'test -f "$backup/SHA256SUMS"' in restore
+    assert "sha256sum --check SHA256SUMS" in restore
+    assert "--exclude=scripts" in restore
+    assert '"$REPO_DIR/scripts/start.sh"' in restore
+    assert "up -d --build" not in restore
+
+
 def test_all_documented_jasmin_callbacks_are_authenticated():
     guide = (ROOT / "docs/ADDING_SMPP_PROVIDER.md").read_text()
     example = (ROOT / "examples/smpp-provider.env.example").read_text()

@@ -114,9 +114,9 @@ Use SSH keys, Fail2ban, unattended security updates, and encrypted off-host back
 
 ## Backups and restore
 
-`scripts/backup.sh` archives the repository configuration, `.env`, Jasmin configuration/store, and Redis state. Backups contain credentials: mode 0700/0600, encrypt them, and copy them off-host. Default retention guidance is 14 days; the script lists expired sets rather than deleting them automatically. RabbitMQ carries transient queues, not authoritative business records; drain or snapshot it separately when strict in-flight recovery is required.
+`scripts/backup.sh` archives the repository configuration, `.env`, Jasmin configuration/store, and Redis state, then creates and verifies `SHA256SUMS`. Backups contain credentials: mode 0700/0600, encrypt them, and copy them off-host. Default retention guidance is 14 days; the script lists expired sets rather than deleting them automatically. RabbitMQ carries transient queues, not authoritative business records; drain or snapshot it separately when strict in-flight recovery is required.
 
-Before restoring, take a new backup, stop traffic, verify archive checksums, and set `CONFIRM_RESTORE=YES`. The restore script replaces Jasmin/Redis volume contents and restarts the stack. Verify users, connectors, routes, API authentication, and DLR flow before reopening traffic.
+Before restoring, take a new backup and set `CONFIRM_RESTORE=YES`. The restore script requires and verifies `SHA256SUMS` before stopping traffic, never overwrites the reviewed Git-controlled deployment scripts from backup data, replaces Jasmin/Redis volume contents, and restarts only approved digest-addressed images through `scripts/start.sh`; it never builds on the server. A restored `SOURCE_SHA` must match the explicitly checked-out approved source. Verify users, connectors, routes, API authentication, and DLR flow before reopening traffic.
 
 ## Monitoring and troubleshooting
 

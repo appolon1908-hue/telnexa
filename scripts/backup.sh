@@ -15,5 +15,12 @@ for volume in "$jasmin_volume" "$redis_volume"; do
   docker run --rm -v "${PROJECT_NAME}_${volume}:/source:ro" -v "$dest:/backup" alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce \
     tar -C /source -czf "/backup/${volume}.tar.gz" .
 done
+(
+  cd "$dest"
+  find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+    | sort -z \
+    | xargs -0 sha256sum > SHA256SUMS
+  sha256sum --check SHA256SUMS
+)
 find "$backup_root" -mindepth 1 -maxdepth 1 -type d -mtime +"${BACKUP_RETENTION_DAYS:-14}" -print
 echo "Backup created: $dest (contains .env secrets; protect and encrypt off-host)."
