@@ -3,7 +3,8 @@ ARG SOURCE_COMMIT_SHA
 RUN test "$(printf '%s' "$SOURCE_COMMIT_SHA" | wc -c)" -eq 40 \
     && case "$SOURCE_COMMIT_SHA" in *[!0-9a-f]*) exit 1 ;; *) : ;; esac
 LABEL org.opencontainers.image.source="https://github.com/appolon1908-hue/telnexa" \
-      org.opencontainers.image.revision="$SOURCE_COMMIT_SHA"
+      org.opencontainers.image.revision="$SOURCE_COMMIT_SHA" \
+      org.opencontainers.image.version="$SOURCE_COMMIT_SHA"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SOURCE_SHA=$SOURCE_COMMIT_SHA
 WORKDIR /app
 RUN apk upgrade --no-cache \

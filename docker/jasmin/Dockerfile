@@ -36,7 +36,7 @@ LABEL org.opencontainers.image.source="https://github.com/appolon1908-hue/telnex
       org.opencontainers.image.revision="$SOURCE_COMMIT_SHA" \
       org.opencontainers.image.base.name="https://github.com/jookies/jasmin" \
       org.opencontainers.image.base.revision="$JASMIN_SOURCE_SHA" \
-      org.opencontainers.image.version="0.12-candidate.$JASMIN_SOURCE_SHA"
+      org.opencontainers.image.version="$SOURCE_COMMIT_SHA"
 
 ENV PATH=/opt/jasmin-venv/bin:$PATH \
     ROOT_PATH=/ \
