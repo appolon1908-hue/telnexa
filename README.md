@@ -106,8 +106,8 @@ Headers include `X-Signature-Version: v1`, `X-Telnexa-Timestamp`, `X-Telnexa-Eve
 ./scripts/logs.sh jasmin           # redacted application logs
 ./scripts/health.sh                # containers, dependencies, API, disk
 ./scripts/console.sh               # loopback jCli inside container
-./scripts/backup.sh                # root-readable local backup
-./scripts/restore.sh BACKUP_DIR    # requires CONFIRM_RESTORE=YES
+./scripts/backup.sh                       # encrypted local + off-host backup
+./scripts/restore.sh BACKUP.tar.gz.gpg    # requires explicit restore confirmation
 ./scripts/provider-test.sh ID      # inspect only; no SMS
 ./scripts/update.sh                # backup, fast-forward, rebuild, validate
 ```
@@ -145,20 +145,26 @@ network. Leave the authorization false after the one-time transition.
 `scripts/backup.sh` archives the repository configuration, `.env`, Keycloak and
 runtime secret files, the dedicated middleware mTLS identity, Jasmin
 configuration/store, Redis state, both PostgreSQL databases, and RabbitMQ
-definitions, then creates and verifies `SHA256SUMS`. The definitions snapshot
-provides the exact pre-migration RabbitMQ topology; it does not contain queued
-message bodies. Backups contain credentials: mode 0700/0600, encrypt them, and
-copy them off-host. Default retention guidance is 14 days; the script lists
-expired sets rather than deleting them automatically. Drain RabbitMQ or use an
-approved broker snapshot when strict in-flight message recovery is required.
+definitions. Plaintext exists only in a validated tmpfs staging directory. The
+script verifies an internal `SHA256SUMS`, imports the approved public recipient
+from `TELNEXA_BACKUP_RECIPIENT_FILE`, emits only a mode-0600 GPG-encrypted
+archive and checksum, and verifies a copy on the distinct mounted source named
+by `TELNEXA_OFF_HOST_BACKUP_DIR`. It fails closed if recipient, tmpfs, or
+off-host authority is unavailable. The definitions snapshot provides the exact
+pre-migration RabbitMQ topology; it does not contain queued message bodies.
+Default retention guidance is 14 days; the script lists expired archives rather
+than deleting them automatically. Drain RabbitMQ or use an approved broker
+snapshot when strict in-flight message recovery is required.
 
-Before restoring, take a new backup and set `CONFIRM_RESTORE=YES`. The restore
-script requires and verifies `SHA256SUMS` before stopping traffic, restores
-secrets only into approved Telnexa roots, never overwrites the reviewed
-Git-controlled deployment scripts from backup data, restores both databases
+Before restoring, take a new encrypted backup and set
+`CONFIRM_RESTORE=RESTORE_TELNEXA`. The restore script verifies the outer
+checksum, decrypts only into tmpfs using `TELNEXA_BACKUP_PRIVATE_KEY_FILE` or an
+approved `TELNEXA_BACKUP_GNUPGHOME`, and verifies the internal `SHA256SUMS`
+before stopping traffic. It restores secrets only into approved Telnexa roots,
+does not install the archived repository configuration, restores both databases
 and RabbitMQ definitions before application startup, replaces Jasmin/Redis
 volume contents, and restarts only approved digest-addressed images through
-`scripts/start.sh`; it never builds on the server. A restored `SOURCE_SHA` must
+`scripts/start.sh`; it never builds on the server. The active `SOURCE_SHA` must
 match the explicitly checked-out approved source. Verify users, connectors,
 routes, API authentication, and DLR flow before reopening traffic.
 

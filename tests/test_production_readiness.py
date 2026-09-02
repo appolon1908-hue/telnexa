@@ -143,21 +143,32 @@ def test_backup_restore_verifies_integrity_and_never_builds_on_server():
     generator = (ROOT / "scripts/generate-env.sh").read_text()
     update = (ROOT / "scripts/update.sh").read_text()
 
-    assert "xargs -0 sha256sum > SHA256SUMS" in backup
+    assert 'sha256sum "${artifacts[@]}" > SHA256SUMS' in backup
     assert "sha256sum --check SHA256SUMS" in backup
+    assert "TELNEXA_BACKUP_RECIPIENT_FILE" in backup
+    assert "TELNEXA_BACKUP_STAGING_ROOT" in backup
+    assert "TELNEXA_OFF_HOST_BACKUP_DIR" in backup
+    assert 'stat -f -c %T "$staging_root"' in backup
+    assert "mountpoint -q" in backup and "findmnt -n -o SOURCE" in backup
+    assert "--encrypt" in backup and "tar.gz.gpg" in backup
+    assert 'sha256sum --check "$(basename "$checksum")"' in backup
     assert "rabbitmqctl --quiet export_definitions" in backup
     assert 'keycloak.pgdump"' in backup
     assert ".secrets config docker" in backup
     assert 'runtime-secrets.tar.gz"' in backup
     assert 'runtime-mtls.tar.gz"' in backup
-    assert 'python3 -m json.tool "$dest/rabbitmq-definitions.json"' in backup
+    assert 'python3 -m json.tool "$stage/rabbitmq-definitions.json"' in backup
     assert 'test -f "$backup/SHA256SUMS"' in restore
     assert "sha256sum --check SHA256SUMS" in restore
-    assert "--exclude=scripts" in restore
+    assert "TELNEXA_BACKUP_PRIVATE_KEY_FILE" in restore
+    assert "CONFIRM_RESTORE=RESTORE_TELNEXA" in restore
+    assert "--decrypt" in restore
+    assert 'stat -f -c %T "$staging_root"' in restore
+    assert 'tar -xzf "$backup/repository-config.tar.gz"' not in restore
     assert (
-        "billing.pgdump keycloak.pgdump rabbitmq-definitions.json runtime-secrets.tar.gz runtime-mtls.tar.gz"
-        in restore
+        "jasmin-config.tar.gz redis-data.tar.gz" in restore
     )
+    assert 'test -f "$archive" || continue' not in restore
     assert 'tar -xzf "$backup/runtime-secrets.tar.gz"' in restore
     assert 'tar -xzf "$backup/runtime-mtls.tar.gz"' in restore
     assert "billing-db keycloak-db redis rabbitmq" in restore
