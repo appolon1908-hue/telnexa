@@ -462,6 +462,12 @@ class InboundMessage(Base):
 
 class SmppCredential(Base):
     __tablename__ = "smpp_credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "enabled = false",
+            name="ck_smpp_credentials_runtime_provisioned_before_enable",
+        ),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
     system_id: Mapped[str] = mapped_column(String(32), unique=True)

@@ -89,6 +89,11 @@ def test_schema_is_not_created_during_api_import():
     command_migration = Path("billing/migrations/007_command_idempotency.sql").read_text()
     assert "CREATE TABLE IF NOT EXISTS command_idempotency" in command_migration
     assert "uq_command_idempotency_identity" in command_migration
+    smpp_gate = Path("billing/migrations/008_smpp_runtime_enablement_gate.sql").read_text()
+    assert "ck_smpp_credentials_runtime_provisioned_before_enable" in smpp_gate
+    assert "SET enabled = false" in smpp_gate
+    validator = Path("scripts/validate_postgres_migrations.py").read_text()
+    assert "SMPP runtime enablement gate missing" in validator
 
 
 def test_smpp_command_headers_are_required_by_openapi():

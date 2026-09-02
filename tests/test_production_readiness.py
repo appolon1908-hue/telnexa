@@ -174,7 +174,14 @@ def test_backup_restore_verifies_integrity_and_never_builds_on_server():
     assert 'tar -xzf "$backup/runtime-secrets.tar.gz"' in restore
     assert 'tar -xzf "$backup/runtime-mtls.tar.gz"' in restore
     assert "billing-db keycloak-db redis rabbitmq" in restore
+    assert "grep -Fx 'rabbitmq-data'" in restore
+    assert 'docker volume rm "$rabbitmq_volume_name"' in restore
     assert "rabbitmqctl --quiet import_definitions" in restore
+    assert (
+        restore.index('docker volume rm "$rabbitmq_volume_name"')
+        < restore.index('"${COMPOSE[@]}" up -d --no-build')
+        < restore.index("rabbitmqctl --quiet import_definitions")
+    )
     assert '"$REPO_DIR/scripts/start.sh"' in restore
     assert "up -d --build" not in restore
     assert "keycloak_admin_password keycloak_db_password" in generator

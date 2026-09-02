@@ -315,6 +315,19 @@ def test_smpp_mutations_have_durable_caller_scoped_idempotency():
     assert updated.status_code == 200
     assert updated.headers["Idempotency-Replayed"] == "false"
     assert updated.json()["tps"] == 30
+    enable_denied = client.patch(
+        f"/api/v1/smpp/accounts/{account_id}",
+        headers={
+            **headers(tenant, key),
+            "Idempotency-Key": "smpp-enable-0001",
+            "X-Correlation-ID": "corr-smpp-enable-0001",
+        },
+        json={"enabled": True},
+    )
+    assert enable_denied.status_code == 409
+    assert enable_denied.json()["detail"] == "smpp_runtime_provisioning_required"
+    db.expire_all()
+    assert db.get(SmppCredential, account_id).enabled is False
     replayed_update = client.patch(
         f"/api/v1/smpp/accounts/{account_id}", headers=patch_headers, json={"tps": 30}
     )

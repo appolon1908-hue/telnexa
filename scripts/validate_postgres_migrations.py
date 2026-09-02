@@ -27,6 +27,16 @@ def main() -> None:
     )
     if constraints != 2:
         raise SystemExit(f"command idempotency constraints missing: {constraints}/2")
+    smpp_enablement_gate = scalar(
+        """
+        SELECT count(*)
+          FROM pg_constraint
+         WHERE conname = 'ck_smpp_credentials_runtime_provisioned_before_enable'
+           AND conrelid = 'smpp_credentials'::regclass
+        """
+    )
+    if smpp_enablement_gate != 1:
+        raise SystemExit(f"SMPP runtime enablement gate missing: {smpp_enablement_gate}/1")
     if (
         scalar("SELECT relrowsecurity FROM pg_class WHERE relname = 'command_idempotency'")
         is not True

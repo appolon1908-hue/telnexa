@@ -63,6 +63,15 @@ for volume in jasmin-config redis-data; do
   docker run --rm -v "${PROJECT_NAME}_${volume}:/target" -v "$backup:/backup:ro" alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce \
     sh -c "find /target -mindepth 1 -delete && tar -C /target -xzf /backup/${volume}.tar.gz"
 done
+rabbitmq_volume=$("${COMPOSE[@]}" config --volumes | grep -Fx 'rabbitmq-data')
+test "$rabbitmq_volume" = rabbitmq-data || { echo "Canonical RabbitMQ volume is missing" >&2; exit 1; }
+rabbitmq_volume_name="${PROJECT_NAME}_${rabbitmq_volume}"
+case "$rabbitmq_volume_name" in
+  *[!A-Za-z0-9_.-]* | "") echo "Unsafe RabbitMQ volume name" >&2; exit 1 ;;
+esac
+if docker volume inspect "$rabbitmq_volume_name" >/dev/null 2>&1; then
+  docker volume rm "$rabbitmq_volume_name" >/dev/null
+fi
 "${COMPOSE[@]}" up -d --no-build --wait --wait-timeout 120 \
   billing-db keycloak-db redis rabbitmq
 for database in billing keycloak; do

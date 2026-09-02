@@ -642,6 +642,9 @@ def smpp_patch(
 ) -> dict[str, Any]:
     caller_identity = _caller_identity(tenant_id)
     semantic_sha256 = _semantic_sha256(account_id, body, partial_update=True)
+    requested_updates = body.model_dump(exclude_unset=True)
+    if requested_updates.get("enabled") is True:
+        raise HTTPException(409, "smpp_runtime_provisioning_required")
     resource = f"smpp_accounts:{account_id}"
     prior = _existing_command(
         s,
@@ -656,7 +659,7 @@ def smpp_patch(
         response.headers["Idempotency-Replayed"] = "true"
         return _stored_response(prior)
     item = _tenant_item(s, SmppCredential, account_id, tenant_id)
-    for key, value in body.model_dump(exclude_unset=True).items():
+    for key, value in requested_updates.items():
         setattr(item, key, value)
     result = {
         "id": item.id,
