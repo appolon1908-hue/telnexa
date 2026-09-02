@@ -11,5 +11,6 @@ test -n "$LETSENCRYPT_EMAIL" && [ "$LETSENCRYPT_EMAIL" != operations@example.com
 "${COMPOSE[@]}" --profile tls run --rm certbot certonly --webroot -w /var/www/certbot \
   --non-interactive --agree-tos --email "$LETSENCRYPT_EMAIL" --cert-name "$SMS_DOMAIN" \
   -d "$SMS_DOMAIN" -d "$API_DOMAIN" -d "$PORTAL_DOMAIN" -d "$ADMIN_DOMAIN" -d "$STATUS_DOMAIN"
+"${COMPOSE[@]}" run --rm nginx-cert-permissions
 "${COMPOSE[@]}" restart nginx
 echo "TLS installed. Test with: curl -I https://$SMS_DOMAIN/healthz"

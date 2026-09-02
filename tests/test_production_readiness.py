@@ -41,6 +41,25 @@ def test_tls_certificate_covers_every_configured_public_hostname():
         assert f"${{{name}}}" in entrypoint
 
 
+def test_nginx_runs_unprivileged_on_high_container_ports():
+    dockerfile = (ROOT / "docker/nginx/Dockerfile").read_text()
+    compose = (ROOT / "docker-compose.yml").read_text()
+    http = (ROOT / "docker/nginx/http.conf.template").read_text()
+    tls = (ROOT / "docker/nginx/tls.conf.template").read_text()
+
+    assert "nginxinc/nginx-unprivileged:1.30.4-alpine@sha256:" in dockerfile
+    assert "USER 101:101" in dockerfile
+    assert "listen 8080 default_server" in http
+    assert "listen 8080 default_server" in tls
+    assert tls.count("listen 8443 ssl") == 5
+    assert "nginx-cert-permissions:" in compose
+    assert "network_mode: none" in compose
+    assert "80}:8080" in compose
+    assert "443}:8443" in compose
+    assert "read_only: true" in compose
+    assert "cap_drop: [ALL]" in compose
+
+
 def test_prometheus_uses_private_metrics_credential():
     compose = (ROOT / "docker-compose.yml").read_text()
     config = (ROOT / "config/prometheus/prometheus.yml").read_text()

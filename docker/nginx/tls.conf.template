@@ -18,17 +18,22 @@ proxy_set_header X-Real-IP $remote_addr;
 proxy_set_header X-Request-ID $request_id;
 
 server {
-    listen 80 default_server;
+    listen 8080 default_server;
     server_name ${SMS_DOMAIN} ${API_DOMAIN} ${PORTAL_DOMAIN} ${ADMIN_DOMAIN} ${STATUS_DOMAIN};
     server_tokens off;
     access_log /var/log/nginx/access.log telnexa_noargs;
 
     location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location = /healthz {
+        access_log off;
+        default_type application/json;
+        return 200 '{"status":"ok","tls":true}';
+    }
     location / { return 301 https://$host$request_uri; }
 }
 
 server {
-    listen 443 ssl;
+    listen 8443 ssl;
     http2 on;
     server_name ${SMS_DOMAIN};
     server_tokens off;
@@ -56,7 +61,7 @@ server {
 }
 
 server {
-    listen 443 ssl;
+    listen 8443 ssl;
     http2 on;
     server_name ${API_DOMAIN};
     server_tokens off;
@@ -85,7 +90,7 @@ server {
 }
 
 server {
-    listen 443 ssl;
+    listen 8443 ssl;
     http2 on;
     server_name ${PORTAL_DOMAIN};
     server_tokens off;
@@ -118,7 +123,7 @@ server {
 }
 
 server {
-    listen 443 ssl;
+    listen 8443 ssl;
     http2 on;
     server_name ${STATUS_DOMAIN};
     server_tokens off;
@@ -142,7 +147,7 @@ server {
 }
 
 server {
-    listen 443 ssl;
+    listen 8443 ssl;
     http2 on;
     server_name ${ADMIN_DOMAIN};
     server_tokens off;

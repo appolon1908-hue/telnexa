@@ -227,6 +227,27 @@ services:
     mem_limit: 256m
     cpus: 1
 
+  nginx-cert-permissions:
+    image: '${TELNEXA_NGINX_IMAGE:?set an immutable Nginx image containing @sha256}'
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        for dir in /etc/letsencrypt/live /etc/letsencrypt/archive; do
+          if [ -d "$$dir" ]; then
+            find "$$dir" -type d -exec chown 0:101 {} + -exec chmod 0750 {} +;
+            find "$$dir" -type f -exec chown 0:101 {} + -exec chmod 0640 {} +;
+          fi;
+        done
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+
   nginx:
     build:
       context: .
@@ -237,6 +258,7 @@ services:
     <<: *default-security
     depends_on:
       webhook-relay: {condition: service_healthy}
+      nginx-cert-permissions: {condition: service_completed_successfully}
     environment:
       SMS_DOMAIN: ${SMS_DOMAIN:-sms.telnexa.co}
       API_DOMAIN: ${API_DOMAIN:-api.telnexa.co}
@@ -244,14 +266,19 @@ services:
       ADMIN_DOMAIN: ${ADMIN_DOMAIN:-admin.telnexa.co}
       STATUS_DOMAIN: ${STATUS_DOMAIN:-status.telnexa.co}
     ports:
-      - "${HTTP_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:80"
-      - "${HTTPS_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:443"
+      - "${HTTP_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:8080"
+      - "${HTTPS_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:8443"
     volumes:
       - letsencrypt:/etc/letsencrypt:ro
       - acme-webroot:/var/www/certbot:ro
     networks: [edge, public, billing]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=1777,size=64m
+      - /etc/nginx/conf.d:rw,noexec,nosuid,nodev,mode=0775,size=1m,uid=101,gid=101
+    cap_drop: [ALL]
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 20s
       timeout: 5s
       retries: 5

@@ -59,7 +59,21 @@ Do not request a certificate until public DNS resolves to the deployment server.
 curl -fsS https://sms.telnexa.co/healthz
 ```
 
-Certbot stores one SAN certificate for all five configured public service names in the `letsencrypt` volume. `admin.telnexa.co` deliberately returns 403 until an approved admin application exists. Renew with the same Certbot webroot command or schedule `docker compose --profile tls run --rm certbot renew && docker compose restart nginx` daily; Certbot only renews when required.
+Certbot stores one SAN certificate for all five configured public service names
+in the `letsencrypt` volume. `admin.telnexa.co` deliberately returns 403 until
+an approved admin application exists. Nginx runs as UID/GID 101 with no Linux
+capabilities, a read-only root filesystem, and unprivileged container ports
+8080/8443; Docker alone publishes those as host ports 80/443. After renewal,
+run the bounded `nginx-cert-permissions` one-shot before restarting Nginx so
+the rootless worker can read the new key without making it world-readable:
+
+```bash
+docker compose --profile tls run --rm certbot renew
+docker compose run --rm nginx-cert-permissions
+docker compose restart nginx
+```
+
+Certbot only renews when required.
 
 ## Configuration and API
 
