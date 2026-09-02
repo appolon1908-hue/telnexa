@@ -46,8 +46,17 @@ ENV PATH=/opt/jasmin-venv/bin:$PATH \
     LOG_PATH=/var/log/jasmin \
     UNICODEMAP_JP=unicode-ascii
 
-RUN apk upgrade --no-cache \
-    && apk add --no-cache ca-certificates jemalloc \
+RUN apk add --no-cache --upgrade \
+       apk-tools=3.0.8-r0 \
+       ca-certificates=20260611-r0 \
+       ca-certificates-bundle=20260611-r0 \
+       jemalloc=5.3.0-r6 \
+       libapk=3.0.8-r0 \
+       libcrypto3=3.5.8-r0 \
+       libgcc=15.2.0-r5 \
+       libssl3=3.5.8-r0 \
+       libstdc++=15.2.0-r5 \
+       sqlite-libs=3.53.4-r0 \
     && addgroup -S jasmin \
     && adduser -S -G jasmin -h /home/jasmin jasmin \
     && install -d -o jasmin -g jasmin -m 0750 \

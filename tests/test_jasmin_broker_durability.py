@@ -27,6 +27,10 @@ def test_jasmin_image_applies_restart_durability_patch():
         in dockerfile
     )
     assert "--require-hashes -r /build/requirements.lock" in dockerfile
+    assert "apk upgrade" not in dockerfile
+    assert "apk-tools=3.0.8-r0" in dockerfile
+    assert "libcrypto3=3.5.8-r0" in dockerfile
+    assert "sqlite-libs=3.53.4-r0" in dockerfile
     jasmin_service = compose.split("  jasmin:\n", 1)[1].split("\n  webhook-relay:", 1)[0]
     assert "read_only: true" in jasmin_service
     assert "/tmp:rw,noexec,nosuid,nodev,mode=1777,size=64m" in jasmin_service
