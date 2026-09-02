@@ -98,6 +98,7 @@ def test_release_is_retry_safe_and_attestation_is_verified() -> None:
     assert "cosign attest --yes --type spdxjson" in WORKFLOW
     assert "cosign verify-attestation --type slsaprovenance1" in WORKFLOW
     assert "cosign verify-attestation --type spdxjson" in WORKFLOW
+    assert WORKFLOW.count("jq -s -e") == 4
     assert "sourceCommit == $source" in WORKFLOW
     assert "registryDigest == $digest" in WORKFLOW
     assert "--certificate-identity" in WORKFLOW
