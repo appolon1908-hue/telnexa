@@ -34,6 +34,29 @@ def test_quick_start_provisions_required_private_contract():
         assert name in generator and name in example
 
 
+def test_quick_start_binds_source_and_requires_immutable_release_images():
+    generator = (ROOT / "scripts/generate-env.sh").read_text()
+    example = (ROOT / ".env.example").read_text()
+    start = (ROOT / "scripts/start.sh").read_text()
+    release_images = (
+        "TELNEXA_KEYCLOAK_IMAGE",
+        "TELNEXA_JASMIN_IMAGE",
+        "TELNEXA_WEBHOOK_RELAY_IMAGE",
+        "TELNEXA_NGINX_IMAGE",
+        "TELNEXA_BILLING_IMAGE",
+        "TELNEXA_GRAFANA_IMAGE",
+    )
+
+    assert "SOURCE_SHA=" in example
+    assert 'set_value SOURCE_SHA "$source_sha"' in generator
+    assert "diff --quiet HEAD --" in generator
+    assert all(f"{name}=example.invalid/" in example for name in release_images)
+    assert "Refusing placeholder images" in start
+    assert 'configured_source=$(sed -n' in start
+    assert '"${COMPOSE[@]}" up -d --no-build' in start
+    assert '"${COMPOSE[@]}" up -d --build' not in start
+
+
 def test_all_documented_jasmin_callbacks_are_authenticated():
     guide = (ROOT / "docs/ADDING_SMPP_PROVIDER.md").read_text()
     example = (ROOT / "examples/smpp-provider.env.example").read_text()

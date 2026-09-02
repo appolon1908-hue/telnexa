@@ -2,6 +2,12 @@
 set -euo pipefail
 [[ "$EUID" -eq 0 ]] || { echo "Run with sudo so runtime credentials are root-owned." >&2; exit 1; }
 repo=$(cd "$(dirname "$0")/.." && pwd)
+source_sha=$(git -c safe.directory="$repo" -C "$repo" rev-parse HEAD)
+[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve exact source SHA." >&2; exit 1; }
+git -c safe.directory="$repo" -C "$repo" diff --quiet HEAD -- || {
+  echo "Refusing to bind production provenance to a modified tracked worktree." >&2
+  exit 1
+}
 env_file="$repo/.env"
 secret_dir="${TELNEXA_RUNTIME_SECRET_DIR:-/etc/telnexa/secrets}"
 install -d -o root -g root -m 0700 "$secret_dir"
@@ -56,6 +62,7 @@ set_value TELNEXA_JASMIN_HTTP_USERNAME_FILE "$jasmin_username_file"
 set_value TELNEXA_JASMIN_HTTP_PASSWORD_FILE "$jasmin_password_file"
 set_value TELNEXA_JASMIN_DLR_TOKEN_FILE "$jasmin_dlr_token_file"
 set_value OIDC_ALLOWED_AZP "${OIDC_ALLOWED_AZP:-telnexa-portal}"
+set_value SOURCE_SHA "$source_sha"
 chown root:root "$env_file"
 chmod 0600 "$env_file"
 echo "Generated root-owned runtime credentials and .env without displaying secret values."

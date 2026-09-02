@@ -1,5 +1,7 @@
 import secrets
 import uuid
+import base64
+import binascii
 import os
 import io
 import csv
@@ -26,6 +28,7 @@ from .models import (
     LedgerEntry,
     Message,
     Sender,
+    ServiceAccount,
     Tenant,
     Usage,
     Wallet,
@@ -88,6 +91,41 @@ def authn(required="read"):
         if principal:
             subject = principal.get("subject") or principal["account_id"]
             return AuthenticatedTenant(x_tenant_id, f"oidc:{subject}")
+        aliases = {
+            "read": {"read", "sms.read", "billing.read"},
+            "messages:write": {"messages:write", "sms.send"},
+            "bulk:write": {"bulk:write", "sms.bulk"},
+        }
+        if authorization and authorization.startswith("Basic "):
+            try:
+                encoded = authorization[6:]
+                if not encoded or len(encoded) > 512:
+                    raise ValueError("invalid basic credential size")
+                decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+                client_id, separator, client_secret = decoded.partition(":")
+                if not separator or not client_id or not client_secret:
+                    raise ValueError("invalid basic credential")
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                raise HTTPException(401, "invalid_service_account")
+            service = db.scalar(
+                select(ServiceAccount).where(
+                    ServiceAccount.tenant_id == x_tenant_id,
+                    ServiceAccount.client_id == client_id,
+                    ServiceAccount.enabled == True,
+                )
+            )
+            try:
+                if not service:
+                    raise VerifyMismatchError
+                ph.verify(service.secret_hash, client_secret)
+            except VerifyMismatchError:
+                raise HTTPException(401, "invalid_service_account")
+            scopes = set(service.scopes.split())
+            if "admin" not in scopes and not scopes.intersection(
+                aliases.get(required, {required})
+            ):
+                raise HTTPException(403, "insufficient_scope")
+            return AuthenticatedTenant(x_tenant_id, f"service-account:{service.id}")
         if not x_api_key:
             raise HTTPException(401, "authentication_required")
         row = db.scalar(
@@ -104,11 +142,6 @@ def authn(required="read"):
         except VerifyMismatchError:
             raise HTTPException(401, "invalid_api_key")
         scopes = set(row.scopes.split())
-        aliases = {
-            "read": {"read", "sms.read", "billing.read"},
-            "messages:write": {"messages:write", "sms.send"},
-            "bulk:write": {"bulk:write", "sms.bulk"},
-        }
         if "admin" not in scopes and not scopes.intersection(aliases.get(required, {required})):
             raise HTTPException(403, "insufficient_scope")
         row.last_used_at = datetime.now(timezone.utc)

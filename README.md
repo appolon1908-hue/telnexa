@@ -32,13 +32,13 @@ git clone https://github.com/appolon1908-hue/telnexa.git
 cd telnexa
 cp .env.example .env
 ./scripts/generate-env.sh
-# Set a real LETSENCRYPT_EMAIL and review domains in .env
+# Set a real LETSENCRYPT_EMAIL, review domains, and replace every
+# example.invalid image with an approved release @sha256 digest in .env
 docker compose config
-docker compose up -d --build
-./scripts/health.sh
+./scripts/start.sh
 ```
 
-`generate-env.sh` replaces every `GENERATE_ME` value with an independent random secret and sets `.env` to mode 0600. Direct startup with placeholder secrets is rejected by the Jasmin container; never deploy the public example values unchanged.
+`generate-env.sh` replaces every `GENERATE_ME` value with an independent random secret, binds `SOURCE_SHA` to the clean checkout, and sets `.env` to mode 0600. `start.sh` rejects placeholder images, source drift, and local builds; it deploys only approved digest-addressed artifacts. Never deploy the public example values unchanged.
 
 ## DNS and TLS
 
@@ -69,6 +69,8 @@ a one-time credential, so the exact result is encrypted at rest before it can be
 plaintext credential is never stored in the idempotency table.
 
 Outbound callers use `https://api.telnexa.co/api/v1/messages` with tenant authentication, scope, idempotency key, and correlation ID. The Telnexa adapter alone maps the accepted message to Jasmin parameters and constructs the protected DLR URL at runtime. `https://sms.telnexa.co/send` is retired and returns 410.
+
+Dedicated service accounts authenticate over TLS with HTTP Basic using the one-time `client_id` and `client_secret` returned by `POST /api/v1/service-accounts`, plus the required `X-Tenant-ID` header. Their database-backed scopes are enforced identically to API-key scopes; audit access requires `audit:read` or `admin`. Never place the Basic credential in a URL or log it.
 
 Provider onboarding: [docs/ADDING_SMPP_PROVIDER.md](docs/ADDING_SMPP_PROVIDER.md). Customer onboarding: [docs/ADDING_SMS_CUSTOMER.md](docs/ADDING_SMS_CUSTOMER.md).
 

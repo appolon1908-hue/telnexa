@@ -15,11 +15,11 @@ from typing import Any, Optional
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, DateTime, String, Text, UniqueConstraint, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm import Session
 
-from .db import Base, session
+from .db import session
 from .models import (
     ApiKey,
     Audit,
@@ -30,6 +30,7 @@ from .models import (
     PhoneNumber,
     Provider,
     Route,
+    ServiceAccount,
     SmppCredential,
     SmsDispatchAttempt,
     SmsDispatchJob,
@@ -50,21 +51,6 @@ IDEMPOTENCY_REPLAY_HEADER = {
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-class ServiceAccount(Base):
-    __tablename__ = "service_accounts"
-    __table_args__ = (UniqueConstraint("tenant_id", "client_id"),)
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
-    name: Mapped[str] = mapped_column(String(160))
-    client_id: Mapped[str] = mapped_column(String(120), unique=True)
-    secret_hash: Mapped[str] = mapped_column(String(255))
-    scopes: Mapped[str] = mapped_column(Text)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    rotated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ServiceAccountIn(BaseModel):
@@ -939,14 +925,29 @@ def operation_reconcile(
 
 
 @router.get("/audit")
-def audit_log(tenant_id: str = Depends(_auth()), s: Session = Depends(session)) -> dict[str, Any]:
+def audit_log(
+    tenant_id: str = Depends(_auth("audit:read")), s: Session = Depends(session)
+) -> dict[str, Any]:
+    rows = s.scalars(
+        select(Audit)
+        .where(Audit.tenant_id == tenant_id)
+        .order_by(Audit.created_at.desc())
+        .limit(500)
+    ).all()
     return {
-        "items": s.scalars(
-            select(Audit)
-            .where(Audit.tenant_id == tenant_id)
-            .order_by(Audit.created_at.desc())
-            .limit(500)
-        ).all()
+        "items": [
+            {
+                "id": row.id,
+                "actor": row.actor,
+                "action": row.action,
+                "target": row.target,
+                "correlation_id": row.correlation_id,
+                "before": row.before,
+                "after": row.after,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ]
     }
 
 

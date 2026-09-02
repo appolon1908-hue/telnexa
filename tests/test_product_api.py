@@ -1,3 +1,4 @@
+import base64
 import os
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -109,6 +110,69 @@ def seed(scopes="admin"):
 
 def headers(t, key):
     return {"X-Tenant-ID": t.id, "X-API-Key": key}
+
+
+def service_headers(tenant, client_id, client_secret):
+    encoded = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    return {"X-Tenant-ID": tenant.id, "Authorization": "Basic " + encoded}
+
+
+def test_issued_service_account_authenticates_with_its_bounded_scopes():
+    _db, tenant, _account, key = seed()
+    client = TestClient(app)
+    created = client.post(
+        "/api/v1/service-accounts",
+        headers=headers(tenant, key),
+        json={"name": "Read integration", "scopes": ["sms.read"]},
+    )
+    assert created.status_code == 201
+    credential = created.json()
+    issued_headers = service_headers(
+        tenant, credential["client_id"], credential["client_secret"]
+    )
+    assert client.get("/api/v1/me", headers=issued_headers).status_code == 200
+    assert client.get("/api/v1/audit", headers=issued_headers).status_code == 403
+
+    invalid_headers = service_headers(
+        tenant, credential["client_id"], "wrong-service-account-secret"
+    )
+    assert client.get("/api/v1/me", headers=invalid_headers).status_code == 401
+
+
+def test_audit_log_requires_explicit_privileged_scope():
+    _db, tenant, _account, read_key = seed(scopes="sms.read")
+    client = TestClient(app)
+    assert client.get("/api/v1/audit", headers=headers(tenant, read_key)).status_code == 403
+
+    privileged = client.post(
+        "/api/v1/service-accounts",
+        headers={**headers(tenant, read_key), "X-API-Key": read_key},
+        json={"name": "Audit integration", "scopes": ["audit:read"]},
+    )
+    assert privileged.status_code == 403
+
+    db = SessionLocal()
+    admin_raw = "tnx_" + "b" * 32
+    db.add(
+        ApiKey(
+            tenant_id=tenant.id,
+            prefix=admin_raw[:12],
+            secret_hash=ph.hash(admin_raw),
+            scopes="admin",
+        )
+    )
+    db.commit()
+    privileged = client.post(
+        "/api/v1/service-accounts",
+        headers=headers(tenant, admin_raw),
+        json={"name": "Audit integration", "scopes": ["audit:read"]},
+    )
+    assert privileged.status_code == 201
+    credential = privileged.json()
+    audit_headers = service_headers(
+        tenant, credential["client_id"], credential["client_secret"]
+    )
+    assert client.get("/api/v1/audit", headers=audit_headers).status_code == 200
 
 
 def test_contact_consent_sender_and_campaign_guardrails():

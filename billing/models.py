@@ -237,6 +237,20 @@ class ApiKey(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ServiceAccount(Base):
+    __tablename__ = "service_accounts"
+    __table_args__ = (UniqueConstraint("tenant_id", "client_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    client_id: Mapped[str] = mapped_column(String(120), unique=True)
+    secret_hash: Mapped[str] = mapped_column(String(255))
+    scopes: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Audit(Base):
     __tablename__ = "audit_log"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
