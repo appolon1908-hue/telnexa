@@ -48,6 +48,9 @@ Create these records, initially with TTL 300:
 |---|---|---|
 | A | `sms.telnexa.co` | `37.27.128.39` |
 | A | `api.telnexa.co` | `37.27.128.39` |
+| A | `app.telnexa.co` | `37.27.128.39` |
+| A | `admin.telnexa.co` | `37.27.128.39` |
+| A | `status.telnexa.co` | `37.27.128.39` |
 
 Do not request a certificate until public DNS resolves to the deployment server. Before TLS, Nginx serves ACME and `/healthz` on HTTP but rejects API requests with 426. After DNS propagates and `.env` contains a real email:
 
@@ -56,7 +59,7 @@ Do not request a certificate until public DNS resolves to the deployment server.
 curl -fsS https://sms.telnexa.co/healthz
 ```
 
-Certbot stores certificates in the `letsencrypt` volume. Renew with the same Certbot webroot command or schedule `docker compose --profile tls run --rm certbot renew && docker compose restart nginx` daily; Certbot only renews when required.
+Certbot stores one SAN certificate for all five configured public service names in the `letsencrypt` volume. `admin.telnexa.co` deliberately returns 403 until an approved admin application exists. Renew with the same Certbot webroot command or schedule `docker compose --profile tls run --rm certbot renew && docker compose restart nginx` daily; Certbot only renews when required.
 
 ## Configuration and API
 
@@ -112,11 +115,38 @@ ufw enable
 
 Use SSH keys, Fail2ban, unattended security updates, and encrypted off-host backups. Do not publish ports 5672, 6379, 8990, 1401, 2775, 9090, or 9100. Customer SMPP should use VPN or an explicit fixed-IP allowlist. Docker environment values are visible to root/Docker administrators; restrict Docker access equivalently to root.
 
+The first upgrade from the legacy root Jasmin image uses two bounded one-shot
+migrations before the non-root service starts. The volume migration changes
+only the `jasmin-config` and `jasmin-logs` ownership to fixed UID/GID 10001.
+The RabbitMQ migration is disabled unless
+`JASMIN_DURABILITY_MIGRATION_AUTHORIZED=true`; it recognizes only Jasmin's
+named queues and `messaging`/`billing` exchanges, refuses unknown bindings,
+refuses any queued message, takes a backup before stopping the existing
+Jasmin process, then deletes only empty unconsumed legacy entities so Jasmin
+can recreate them durable. RabbitMQ management remains private on the backend
+network. Leave the authorization false after the one-time transition.
+
 ## Backups and restore
 
-`scripts/backup.sh` archives the repository configuration, `.env`, Jasmin configuration/store, and Redis state, then creates and verifies `SHA256SUMS`. Backups contain credentials: mode 0700/0600, encrypt them, and copy them off-host. Default retention guidance is 14 days; the script lists expired sets rather than deleting them automatically. RabbitMQ carries transient queues, not authoritative business records; drain or snapshot it separately when strict in-flight recovery is required.
+`scripts/backup.sh` archives the repository configuration, `.env`, Keycloak and
+runtime secret files, the dedicated middleware mTLS identity, Jasmin
+configuration/store, Redis state, both PostgreSQL databases, and RabbitMQ
+definitions, then creates and verifies `SHA256SUMS`. The definitions snapshot
+provides the exact pre-migration RabbitMQ topology; it does not contain queued
+message bodies. Backups contain credentials: mode 0700/0600, encrypt them, and
+copy them off-host. Default retention guidance is 14 days; the script lists
+expired sets rather than deleting them automatically. Drain RabbitMQ or use an
+approved broker snapshot when strict in-flight message recovery is required.
 
-Before restoring, take a new backup and set `CONFIRM_RESTORE=YES`. The restore script requires and verifies `SHA256SUMS` before stopping traffic, never overwrites the reviewed Git-controlled deployment scripts from backup data, replaces Jasmin/Redis volume contents, and restarts only approved digest-addressed images through `scripts/start.sh`; it never builds on the server. A restored `SOURCE_SHA` must match the explicitly checked-out approved source. Verify users, connectors, routes, API authentication, and DLR flow before reopening traffic.
+Before restoring, take a new backup and set `CONFIRM_RESTORE=YES`. The restore
+script requires and verifies `SHA256SUMS` before stopping traffic, restores
+secrets only into approved Telnexa roots, never overwrites the reviewed
+Git-controlled deployment scripts from backup data, restores both databases
+and RabbitMQ definitions before application startup, replaces Jasmin/Redis
+volume contents, and restarts only approved digest-addressed images through
+`scripts/start.sh`; it never builds on the server. A restored `SOURCE_SHA` must
+match the explicitly checked-out approved source. Verify users, connectors,
+routes, API authentication, and DLR flow before reopening traffic.
 
 ## Monitoring and troubleshooting
 

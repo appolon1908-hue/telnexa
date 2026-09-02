@@ -59,7 +59,7 @@
     "clientId":"telnexa-portal","name":"Telnexa Portal","enabled":true,"publicClient":true,
     "standardFlowEnabled":true,"directAccessGrantsEnabled":false,"serviceAccountsEnabled":false,
     "rootUrl":"https://api.telnexa.co","baseUrl":"/dashboard",
-    "redirectUris":["https://api.telnexa.co/*"],"webOrigins":["https://api.telnexa.co"],
+    "redirectUris":["https://api.telnexa.co/*","https://app.telnexa.co/*"],"webOrigins":["https://api.telnexa.co","https://app.telnexa.co"],
     "attributes":{"pkce.code.challenge.method":"S256"},
     "protocolMappers":[{"name":"realm-roles","protocol":"openid-connect","protocolMapper":"oidc-usermodel-realm-role-mapper","config":{"claim.name":"realm_access.roles","jsonType.label":"String","multivalued":"true","access.token.claim":"true","id.token.claim":"true","userinfo.token.claim":"true","user.attribute":"foo"}}],
     "defaultClientScopes":["web-origins","acr","profile","roles","email","tenant-bindings","api-audience"]

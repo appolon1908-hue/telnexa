@@ -57,8 +57,8 @@ RUN apk add --no-cache --upgrade \
        libssl3=3.5.8-r0 \
        libstdc++=15.2.0-r5 \
        sqlite-libs=3.53.4-r0 \
-    && addgroup -S jasmin \
-    && adduser -S -G jasmin -h /home/jasmin jasmin \
+    && addgroup -g 10001 -S jasmin \
+    && adduser -u 10001 -S -G jasmin -h /home/jasmin jasmin \
     && install -d -o jasmin -g jasmin -m 0750 \
        /home/jasmin /etc/jasmin/resource /etc/jasmin/store /var/log/jasmin
 ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
@@ -74,9 +74,11 @@ RUN python /tmp/telnexa-harden-jasmin-durability.py \
 COPY docker/jasmin/configure.py /usr/local/bin/telnexa-configure
 COPY docker/jasmin/bootstrap.py /usr/local/bin/telnexa-bootstrap
 COPY docker/jasmin/jcli_batch.py /usr/local/bin/telnexa-jcli-batch
+COPY docker/jasmin/migrate_topology.py /usr/local/bin/telnexa-migrate-topology
 COPY docker/jasmin/entrypoint.sh /usr/local/bin/telnexa-entrypoint
 RUN chmod 0755 /usr/local/bin/telnexa-configure /usr/local/bin/telnexa-bootstrap \
-    /usr/local/bin/telnexa-jcli-batch /usr/local/bin/telnexa-entrypoint
+    /usr/local/bin/telnexa-jcli-batch /usr/local/bin/telnexa-migrate-topology \
+    /usr/local/bin/telnexa-entrypoint
 
 USER jasmin
 EXPOSE 1401 2775 8990

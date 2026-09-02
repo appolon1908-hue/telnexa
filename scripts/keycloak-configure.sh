@@ -29,6 +29,21 @@ admin_password=$(cat /run/secrets/keycloak_admin_password)
 /opt/keycloak/bin/kcadm.sh update authentication/required-actions/VERIFY_EMAIL \
   -r telnexa -s enabled=true -s defaultAction=true
 
+portal_client_id=$(
+  /opt/keycloak/bin/kcadm.sh get clients -r telnexa \
+    -q clientId=telnexa-portal --fields id --format csv --noquotes \
+    | sed -n '2p'
+)
+case "$portal_client_id" in
+  "" | *[!A-Za-z0-9-]*)
+    echo "Telnexa portal client identity is missing or invalid" >&2
+    exit 1
+    ;;
+esac
+/opt/keycloak/bin/kcadm.sh update "clients/$portal_client_id" -r telnexa \
+  -s 'redirectUris=["https://api.telnexa.co/*","https://app.telnexa.co/*"]' \
+  -s 'webOrigins=["https://api.telnexa.co","https://app.telnexa.co"]'
+
 realm=$(/opt/keycloak/bin/kcadm.sh get realms/telnexa \
   --fields verifyEmail,bruteForceProtected,eventsEnabled,adminEventsEnabled,adminEventsDetailsEnabled)
 for field in verifyEmail bruteForceProtected eventsEnabled adminEventsEnabled adminEventsDetailsEnabled; do
@@ -38,4 +53,10 @@ totp=$(/opt/keycloak/bin/kcadm.sh get authentication/required-actions/CONFIGURE_
   --fields enabled,defaultAction)
 grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' <<<"$totp"
 grep -Eq '"defaultAction"[[:space:]]*:[[:space:]]*true' <<<"$totp"
+portal=$(/opt/keycloak/bin/kcadm.sh get "clients/$portal_client_id" -r telnexa \
+  --fields redirectUris,webOrigins)
+grep -Fq 'https://api.telnexa.co/*' <<<"$portal"
+grep -Fq 'https://app.telnexa.co/*' <<<"$portal"
+grep -Fq 'https://api.telnexa.co' <<<"$portal"
+grep -Fq 'https://app.telnexa.co' <<<"$portal"
 printf '%s\n' 'Keycloak tenant profile, MFA, brute-force, session, and audit controls configured'

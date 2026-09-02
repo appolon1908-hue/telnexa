@@ -1,9 +1,28 @@
 limit_req_zone $binary_remote_addr zone=sms_api:10m rate=20r/s;
-log_format telnexa_noargs '$remote_addr [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
+limit_req_zone $binary_remote_addr zone=identity_api:10m rate=5r/s;
+log_format telnexa_noargs '$remote_addr [$time_local] request_id=$request_id '
+                          '"$request_method $uri $server_protocol" $status $body_bytes_sent';
+
+client_header_timeout 15s;
+client_body_timeout 15s;
+send_timeout 30s;
+client_max_body_size 1m;
+proxy_connect_timeout 5s;
+proxy_send_timeout 30s;
+proxy_read_timeout 30s;
+proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Host $host;
+proxy_set_header X-Forwarded-Proto https;
+proxy_set_header X-Forwarded-For $remote_addr;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Request-ID $request_id;
 
 server {
     listen 80 default_server;
-    server_name ${SMS_DOMAIN} ${API_DOMAIN} ${PORTAL_DOMAIN} ${ADMIN_DOMAIN};
+    server_name ${SMS_DOMAIN} ${API_DOMAIN} ${PORTAL_DOMAIN} ${ADMIN_DOMAIN} ${STATUS_DOMAIN};
+    server_tokens off;
+    access_log /var/log/nginx/access.log telnexa_noargs;
+
     location ^~ /.well-known/acme-challenge/ { root /var/www/certbot; }
     location / { return 301 https://$host$request_uri; }
 }
@@ -21,9 +40,15 @@ server {
     add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy no-referrer always;
+    add_header X-Frame-Options DENY always;
+    add_header X-Request-ID $request_id always;
     access_log /var/log/nginx/access.log telnexa_noargs;
 
-    location = /healthz { access_log off; default_type application/json; return 200 '{"status":"ok","tls":true}'; }
+    location = /healthz {
+        access_log off;
+        default_type application/json;
+        return 200 '{"status":"ok","tls":true}';
+    }
     location / {
         default_type application/json;
         return 410 '{"error":"raw Jasmin transport is retired; use https://api.telnexa.co/api/v1/messages"}';
@@ -38,16 +63,100 @@ server {
     ssl_certificate /etc/letsencrypt/live/${SMS_DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${SMS_DOMAIN}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:TelnexaTLS:10m;
     add_header Strict-Transport-Security "max-age=31536000" always;
-    location = /healthz { proxy_pass http://billing-api:8000/health; }
+    add_header X-Content-Type-Options nosn always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Frame-Options DENY always;
+    add_header X-Request-ID $request_id always;
+    access_log /var/log/nginx/access.log telnexa_noargs;
+
+    location = /healthz { access_log off; proxy_pass http://billing-api:8000/health; }
     location ^~ /internal/ { default_type application/json; return 404 '{"error":"not found"}'; }
-    location / { limit_req zone=sms_api burst=40 nodelay; proxy_pass http://billing-api:8000; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto https; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; client_max_body_size 1m; }
+    location ^~ /auth/ {
+        limit_req zone=identity_api burst=10 nodelay;
+        proxy_pass http://keycloak:8080;
+    }
+    location / {
+        limit_req zone=sms_api burst=40 nodelay;
+        proxy_pass http://billing-api:8000;
+    }
 }
 
 server {
-    listen 443 ssl; http2 on; server_name ${PORTAL_DOMAIN} ${ADMIN_DOMAIN}; server_tokens off;
-    ssl_certificate /etc/letsencrypt/live/${SMS_DOMAIN}/fullchain.pem; ssl_certificate_key /etc/letsencrypt/live/${SMS_DOMAIN}/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3; add_header Strict-Transport-Security "max-age=31536000" always;
-    add_header X-Content-Type-Options nosn always; add_header X-Frame-Options DENY always;
-    location / { proxy_pass http://billing-api:8000; proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto https; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; }
+    listen 443 ssl;
+    http2 on;
+    server_name ${PORTAL_DOMAIN};
+    server_tokens off;
+    ssl_certificate /etc/letsencrypt/live/${SMS_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${SMS_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:TelnexaTLS:10m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosn always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Frame-Options DENY always;
+    add_header X-Request-ID $request_id always;
+    access_log /var/log/nginx/access.log telnexa_noargs;
+
+    location ^~ /auth/ {
+        limit_req zone=identity_api burst=10 nodelay;
+        proxy_pass http://keycloak:8080;
+        proxy_set_header Host ${API_DOMAIN};
+        proxy_set_header X-Forwarded-Host ${API_DOMAIN};
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Request-ID $request_id;
+    }
+    location / {
+        limit_req zone=sms_api burst=40 nodelay;
+        proxy_pass http://billing-api:8000;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${STATUS_DOMAIN};
+    server_tokens off;
+    ssl_certificate /etc/letsencrypt/live/${SMS_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${SMS_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:TelnexaTLS:10m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosn always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Frame-Options DENY always;
+    add_header X-Request-ID $request_id always;
+    access_log /var/log/nginx/access.log telnexa_noargs;
+
+    location = /healthz {
+        access_log off;
+        proxy_pass http://billing-api:8000/ready;
+    }
+    location / { default_type application/json; return 404 '{"error":"not found"}'; }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${ADMIN_DOMAIN};
+    server_tokens off;
+    ssl_certificate /etc/letsencrypt/live/${SMS_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${SMS_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:TelnexaTLS:10m;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosn always;
+    add_header Referrer-Policy no-referrer always;
+    add_header X-Frame-Options DENY always;
+    add_header X-Request-ID $request_id always;
+    access_log /var/log/nginx/access.log telnexa_noargs;
+
+    location / { return 403; }
 }

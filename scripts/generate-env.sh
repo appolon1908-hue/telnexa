@@ -10,7 +10,17 @@ git -c safe.directory="$repo" -C "$repo" diff --quiet HEAD -- || {
 }
 env_file="$repo/.env"
 secret_dir="${TELNEXA_RUNTIME_SECRET_DIR:-/etc/telnexa/secrets}"
+case "$secret_dir" in
+  /etc/telnexa/secrets | /opt/telnexa/secrets) ;;
+  *) echo "Runtime secret directory is outside the approved Telnexa roots" >&2; exit 1 ;;
+esac
 install -d -o root -g root -m 0700 "$secret_dir"
+keycloak_secret_dir="$repo/.secrets"
+install -d -o root -g root -m 0700 "$keycloak_secret_dir"
+for file in keycloak_admin_password keycloak_db_password; do
+  [[ -s "$keycloak_secret_dir/$file" ]] \
+    || openssl rand -base64 36 | install -o root -g root -m 0600 /dev/stdin "$keycloak_secret_dir/$file"
+done
 test -f "$env_file" || cp "$repo/.env.example" "$env_file"
 chmod 0600 "$env_file"
 for key in RABBITMQ_PASSWORD REDIS_PASSWORD JASMIN_ADMIN_PASSWORD JASMIN_API_PASSWORD WEBHOOK_HMAC_SECRET BILLING_DB_PASSWORD BILLING_JWT_SECRET BILLING_ADMIN_TOKEN BILLING_MIDDLEWARE_API_KEY BILLING_MIDDLEWARE_HMAC_SECRET GRAFANA_ADMIN_PASSWORD; do
