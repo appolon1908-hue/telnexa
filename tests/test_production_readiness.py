@@ -32,6 +32,10 @@ def test_portal_and_api_use_the_local_telnexa_identity_authority():
     assert "if grep -qx 'VERIFY_PROFILE'" in configure
     assert "Expected exactly one Telnexa portal client identity" in configure
     assert "sed -n '2p'" not in configure
+    assert "-s revokeRefreshToken=true" in configure
+    assert "-s refreshTokenMaxReuse=0" in configure
+    assert '"revokeRefreshToken"' in configure
+    assert '"refreshTokenMaxReuse"' in configure
 
 
 def test_tls_certificate_covers_every_configured_public_hostname():
