@@ -113,8 +113,10 @@ def test_release_workflow_has_no_runtime_deployment_or_delivery_action() -> None
     assert all(token not in lowered for token in forbidden)
 
 
-def test_full_history_secret_scan_only_ignores_reviewed_false_positive_fingerprints() -> None:
-    assert "git --redact --no-banner /repo" in WORKFLOW
+def test_protected_source_secret_scan_uses_exact_reviewed_allowlist() -> None:
+    assert "git --redact --no-banner" in WORKFLOW
+    assert "--gitleaks-ignore-path /repo/.gitleaksignore" in WORKFLOW
+    assert '--log-opts="$SOURCE_SHA" /repo' in WORKFLOW
     fingerprints = {line for line in GITLEAKS_IGNORE.splitlines() if line}
     assert fingerprints == {
         "515b29481dd638f227eadc611c0a7dc2b92acbdd:.github/workflows/step4-format-artifact.yml:generic-api-key:28",
