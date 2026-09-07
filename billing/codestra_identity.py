@@ -86,8 +86,10 @@ def _load_keys() -> dict:
 def _signing_key(kid: str):
     with _lock:
         age = time.monotonic() - _cache["at"]
-        if not _cache["keys"] or age >= _CACHE_TTL or (
-            kid not in _cache["keys"] and age >= _REFRESH_INTERVAL
+        if (
+            not _cache["keys"]
+            or age >= _CACHE_TTL
+            or (kid not in _cache["keys"] and age >= _REFRESH_INTERVAL)
         ):
             keys = _load_keys()
             _cache.update(at=time.monotonic(), keys=keys)
