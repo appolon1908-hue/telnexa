@@ -1,0 +1,291 @@
+version: 1
+name: telnexa-codestra-cross-server-sms
+status: planning_authority
+
+source_reconciliation:
+  date: '2026-09-07'
+  runtime_verified: false
+  source_merge_authorizes_deployment: false
+  notes: >-
+    This reconciled contract takes precedence over historical ownership, identity
+    and endpoint assumptions in the accompanying planning blueprints. Host/network
+    mappings require fresh runtime evidence. Preferred Middleware paths are design
+    targets, not a statement that those routes are deployed. Current protected
+    runtime code and generated OpenAPI remain the implemented API authority.
+
+hosts:
+  server_a:
+    public_ip: 65.109.65.169
+    private_ip: 10.40.0.1
+    roles: [caddy, kong, keycloak_integration, middleware, odoo_integration, n8n_integration]
+  communications:
+    public_ip: 37.27.128.39
+    private_ip: 10.40.0.4
+    roles: [telnexa_api, telnexa_billing, jasmin, smpp, provider_event_processing]
+  voice:
+    public_ip: 65.21.67.207
+    private_ip: 10.40.0.2
+    roles: [vicidial, asterisk]
+    sms_provider_target: false
+
+repositories:
+  telnexa: appolon1908-hue/telnexa
+  middleware: appolon1908-hue/Middleware-
+  platform: appolon1908-hue/codestra-production-platform
+
+canonical_identity:
+  issuer: https://auth.codestra.co/realms/codestra
+  audience: telnexa-gateway
+  purpose: machine_to_machine_only
+  default_enabled: false
+  max_token_lifetime_seconds: 300
+  caller_allowlist_required: true
+  tenant_and_account_binding_required: true
+  local_portal_issuer: https://api.telnexa.co/auth/realms/telnexa
+  local_portal_audience: telnexa-api
+  replaces_local_portal_authority: false
+
+architecture:
+  outbound:
+    - client
+    - caddy
+    - kong
+    - keycloak
+    - middleware
+    - telnexa_commercial_api
+    - telnexa_policy_billing
+    - durable_dispatch
+    - route_engine
+    - jasmin_adapter
+    - jasmin
+    - carrier
+  inbound_event:
+    - carrier
+    - jasmin
+    - telnexa_provider_event_inbox
+    - telnexa_event_processor
+    - telnexa_integration_outbox
+    - middleware_event_receiver
+    - governed_business_target
+
+forbidden_paths:
+  - middleware_to_jasmin_raw_send
+  - middleware_to_jasmin_jcli
+  - middleware_to_smpp_credentials
+  - middleware_to_telnexa_billing_database
+  - browser_to_provider_credentials
+  - provider_callback_tenant_authority
+  - blind_failover_after_ambiguous_submission
+  - duplicate_billing_from_retry
+  - direct_odoo_database_write
+
+middleware_api:
+  send:
+    method: POST
+    preferred_path: /v1/messages/sms
+    scope: sms.send
+    idempotency_required: true
+  message:
+    method: GET
+    preferred_path: /v1/messages/sms/{message_id}
+    scope: sms.status.read
+  events:
+    method: GET
+    preferred_path: /v1/messages/sms/{message_id}/events
+    scope: sms.status.read
+  telnexa_event_receiver:
+    method: POST
+    preferred_path: /v1/internal/events/telnexa/sms
+    exposure: private_or_protected
+    replay_protection: required
+    schema: codestra.sms.event.v1
+
+telnexa_api:
+  send:
+    method: POST
+    path: /api/v1/messages
+    scope: sms.send
+    idempotency_required: true
+  message:
+    method: GET
+    path: /api/v1/messages/{message_id}
+    scope: sms.status.read
+  events:
+    method: GET
+    path: /api/v1/messages/{message_id}/events
+    scope: sms.status.read
+  provider_event_inbox:
+    method: POST
+    path: /internal/v1/provider-events/jasmin
+    exposure: private
+    authenticated_source_required: true
+    signed_raw_body_required: true
+    provider_callback_may_select_tenant: false
+
+sms_event_types:
+  - sms.accepted
+  - sms.queued
+  - sms.submitted
+  - sms.delivered
+  - sms.failed
+  - sms.expired
+  - sms.undeliverable
+  - sms.submission_unknown
+  - sms.inbound.received
+  - sms.opted_out
+  - sms.opted_in
+  - sms.help_requested
+  - sms.billing.finalized
+  - sms.billing.released
+
+middleware_logical_storage:
+  reuse_existing_when_equivalent: true
+  required_records:
+    - sms_requests
+    - sms_provider_events_inbox
+    - sms_integration_outbox
+    - sms_reconciliation_runs
+
+telnexa_storage:
+  required_records:
+    - messages
+    - message_events
+    - balance_reservations
+    - usage_records
+    - sms_dispatch_jobs
+    - sms_dispatch_attempts
+    - sms_route_decisions
+    - sms_provider_event_inbox
+    - sms_provider_event_attempts
+    - sms_reconciliation_cases
+    - sms_production_canary_gates
+
+security:
+  middleware_to_telnexa:
+    transport: private
+    mtls: required_for_cross_server_production
+    service_identity: dedicated
+    scope: sms.send
+    jasmin_credentials: forbidden
+  telnexa_to_middleware:
+    transport: private
+    mtls: required_for_cross_server_production
+    signed_events: true
+    timestamp_validation: true
+    event_id_replay_protection: true
+  provider_events:
+    provider_callback_may_select_tenant: false
+    schema_validation: true
+    size_limit: true
+  tenant_isolation:
+    api: required
+    database_rls_or_equivalent: required
+    cross_tenant_access: denied
+
+feature_flags:
+  required_fail_closed_before_real_canary:
+    LIVE_SMS_DELIVERY: false
+    SMS_PRODUCTION_ENABLED: false
+    TELNEXA_PRODUCTION_SMS_ENABLED: false
+    ENABLE_EXTERNAL_DELIVERY: false
+  unrelated_channels_unchanged:
+    email: true
+    voice: true
+
+state_machine:
+  normal:
+    - RECEIVED
+    - AUTHORIZED
+    - TELNEXA_ACCEPTED
+    - PROVIDER_QUEUED
+    - SUBMITTED
+    - DELIVERED
+  terminal:
+    - DENIED
+    - FAILED
+    - EXPIRED
+    - UNDELIVERABLE
+    - CANCELLED
+  ambiguous:
+    - SUBMISSION_UNKNOWN
+
+retry_rules:
+  same_logical_request_uses_same_idempotency_key: true
+  policy_4xx_retry: false
+  bounded_5xx_retry: true
+  bounded_5xx_retry_requires_same_idempotency_and_no_provider_resubmit: true
+  middleware_may_fallback_to_jasmin: false
+  ambiguous_submission_failover: false
+  ambiguous_submission_resubmit: false
+  authoritative_readback_before_resolution: true
+
+billing:
+  segment_authority: telnexa
+  rate_snapshot_authority: telnexa
+  reserve_before_dispatch: true
+  finalize_exactly_once: true
+  usage_exactly_once: true
+  duplicate_dlr_changes_billing: false
+  ambiguous_submission_release_immediately: false
+
+compliance:
+  final_send_gate: telnexa
+  stop_processing_local_to_telnexa: true
+  stop_must_survive_middleware_outage: true
+  marketing_after_stop: denied
+
+network:
+  allow:
+    - source: 10.40.0.1
+      destination: 10.40.0.4
+      purpose: telnexa_governed_api
+    - source: 10.40.0.4
+      destination: 10.40.0.1
+      purpose: middleware_sms_event_receiver
+  deny_after_migration:
+    - source: 10.40.0.1
+      destination_service: jasmin_admin
+    - source: 10.40.0.1
+      destination_service: jasmin_raw_http_send
+    - source: 10.40.0.1
+      destination_service: telnexa_billing_db
+
+certification_lanes:
+  - unit_contract
+  - cross_server_simulator
+  - provider_sandbox
+  - single_real_canary
+
+real_canary:
+  default_enabled: false
+  durable_max_deliveries: 1
+  explicit_destination_required: true
+  explicit_sender_required: true
+  explicit_provider_route_required: true
+  explicit_window_required: true
+  do_not_repeat_on_delayed_dlr: true
+
+required_tests:
+  - middleware_auth_negative_matrix
+  - middleware_tenant_spoof_denied
+  - same_request_idempotency
+  - altered_request_conflict
+  - direct_jasmin_bypass_denied
+  - synthetic_outbound_e2e
+  - dlr_e2e_and_replay
+  - mo_e2e_and_replay
+  - stop_with_middleware_outage
+  - telnexa_outage_fail_closed
+  - ambiguous_submission_no_blind_failover
+  - route_failover_only_on_definitive_presubmit_failure
+  - segment_billing_reconciliation
+  - cross_server_traceability
+  - controlled_synthetic_load
+  - klyrow_shared_host_regression
+
+software_success:
+  - CODESTRA_MIDDLEWARE_TELNEXA_SMS_INTEGRATION_READY
+  - TELNEXA_CODESTRA_SMS_CROSS_SERVER_SOFTWARE_CERTIFIED
+
+production_success:
+  - TELNEXA_PRODUCTION_SMS_ADAPTER_CERTIFIED
