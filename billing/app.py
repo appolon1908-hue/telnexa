@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
 from .db import SessionLocal, session
@@ -35,6 +36,7 @@ from .models import (
 )
 from .engine import credit
 from .dispatch import accept_message
+from .message_idempotency import lock_message_key, recover_message_insert_race
 from .provider_events import ingest, verify_signature
 from .production_gates import production_enabled, reserve_canary
 from .sms_metrics import CANARY_REMAINING, DISPATCH_JOBS, SUBMISSION_UNKNOWN, UNMATCHED_EVENTS
@@ -248,6 +250,7 @@ def send(
     tenant = db.get(Tenant, tenant_id)
     if not tenant or tenant.status != "active":
         raise HTTPException(403, "tenant_inactive")
+    lock_message_key(db, tenant_id, idempotency_key)
     request_hash = hashlib.sha256(
         json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -316,6 +319,10 @@ def send(
         )
         db.commit()
         SENDS.labels(msg.status).inc()
+        return message_json(msg)
+    except IntegrityError as exc:
+        msg = recover_message_insert_race(db, tenant_id, idempotency_key, request_hash, exc)
+        DUPES.inc()
         return message_json(msg)
     except ValueError as e:
         db.rollback()
