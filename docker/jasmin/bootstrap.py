@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently create the middleware Jasmin group/user and quotas."""
+"""Idempotently create the private Telnexa adapter Jasmin user and quotas."""
 
 import os
 import telnetlib
@@ -7,7 +7,7 @@ import telnetlib
 admin_user = os.environ.get("JASMIN_ADMIN_USER", "telnexa-admin")
 admin_password = os.environ["JASMIN_ADMIN_PASSWORD"]
 api_group = os.environ.get("JASMIN_API_GROUP", "telnexa-api")
-api_user = os.environ.get("JASMIN_API_USER", "middleware")
+api_user = os.environ.get("JASMIN_API_USER", "telnexa-adapter")
 api_password = os.environ["JASMIN_API_PASSWORD"]
 
 session = telnetlib.Telnet("127.0.0.1", 8990, timeout=20)

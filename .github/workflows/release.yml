@@ -1,10 +1,9 @@
 name: Immutable production release
 
 on:
-  workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,74 +11,208 @@ permissions:
   id-token: write
   attestations: write
 
+concurrency:
+  group: telnexa-production-release
+  cancel-in-progress: false
+
 jobs:
-  test-build-scan:
-    runs-on: ubuntu-latest
+  test-build-scan-publish:
+    name: Release ${{ matrix.name }}
+    if: github.ref == 'refs/heads/main' && github.ref_protected == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: billing
+            dockerfile: billing/Dockerfile
+          - name: keycloak
+            dockerfile: docker/keycloak/Dockerfile
+          - name: jasmin
+            dockerfile: docker/jasmin/Dockerfile
+          - name: webhook-relay
+            dockerfile: docker/webhook-relay/Dockerfile
+          - name: nginx
+            dockerfile: docker/nginx/Dockerfile
     env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/telnexa-billing
+      IMAGE: ghcr.io/${{ github.repository_owner }}/telnexa-${{ matrix.name }}
+      SOURCE_SHA: ${{ github.sha }}
+      TRIVY_IMAGE: aquasec/trivy@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
+      SYFT_IMAGE: anchore/syft@sha256:f94e5d9fce1f2278491a8e3a63bd5f6ddb81fdfdbb8bf7a1637565c1d5344357
+      GITLEAKS_IMAGE: zricethezav/gitleaks@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854
     steps:
-      - uses: actions/checkout@v5
+      - name: Check out exact protected source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify protected-main release identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REPOSITORY" = 'appolon1908-hue/telnexa'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$GITHUB_REF_PROTECTED" = 'true'
+          test "$GITHUB_EVENT_NAME" = 'push' -o "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$SOURCE_SHA")" >> "$GITHUB_ENV"
 
       - name: Reject committed secrets
         run: |
-          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.28.0 \
-            git --redact --no-banner /repo
+          docker run --rm -v "$PWD:/repo:ro" "$GITLEAKS_IMAGE" \
+            git --redact --no-banner \
+            --gitleaks-ignore-path /repo/.gitleaksignore \
+            --log-opts="$SOURCE_SHA" /repo
 
-      - name: Run automated tests
+      - name: Run automated tests against the exact image source
+        if: matrix.name == 'billing'
         run: |
-          docker build --pull -t telnexa-ci:${{ github.sha }} -f billing/Dockerfile .
+          docker build --pull --build-arg SOURCE_COMMIT_SHA="$SOURCE_SHA" -t "telnexa-ci:${SOURCE_SHA}" -f "${{ matrix.dockerfile }}" .
           docker run --rm -v "$PWD:/src:ro" -w /src --entrypoint pytest \
-            telnexa-ci:${{ github.sha }} -q
+            "telnexa-ci:${SOURCE_SHA}" -q
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up pinned Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - uses: docker/login-action@v3
+      - name: Authenticate to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
-      - name: Build and publish immutable image with attestations
+      - name: Build immutable candidate with embedded provenance and SBOM
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        env:
+          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
         with:
           context: .
-          file: billing/Dockerfile
+          file: ${{ matrix.dockerfile }}
+          build-args: SOURCE_COMMIT_SHA=${{ env.SOURCE_SHA }}
           push: true
-          tags: ${{ env.IMAGE }}:sha-${{ github.sha }}
+          tags: ${{ env.IMAGE }}:candidate-${{ github.run_id }}-${{ github.run_attempt }}
           labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           provenance: mode=max
           sbom: true
 
-      - name: Scan immutable image
+      - name: Scan exact candidate digest before production promotion
+        env:
+          CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          docker run --rm aquasec/trivy:0.67.2 image \
+          set -Eeuo pipefail
+          test -n "$CANDIDATE_DIGEST"
+          exact_image="${IMAGE}@${CANDIDATE_DIGEST}"
+          docker pull "$exact_image"
+          test "$(docker image inspect "$exact_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$SOURCE_SHA"
+          docker run --rm -v "$HOME/.docker:/root/.docker:ro" "$TRIVY_IMAGE" image \
             --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL \
-            "${IMAGE}@${{ steps.build.outputs.digest }}"
+            "$exact_image"
 
-      - name: Generate release SBOM and checksums
+      - name: Generate exact-digest SBOM and archive evidence
+        env:
+          CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          docker pull "${IMAGE}@${{ steps.build.outputs.digest }}"
-          docker save "${IMAGE}@${{ steps.build.outputs.digest }}" | \
-            zstd -T0 -10 -o image.tar.zst
-          docker run --rm anchore/syft:v1.33.0 \
-            "${IMAGE}@${{ steps.build.outputs.digest }}" \
-            -o cyclonedx-json > sbom.cdx.json
-          printf '%s\n' '${{ github.sha }}' > SOURCE_SHA
-          printf '%s\n' '${{ steps.build.outputs.digest }}' > IMAGE_DIGEST
-          sha256sum SOURCE_SHA IMAGE_DIGEST sbom.cdx.json image.tar.zst > SHA256SUMS
+          set -Eeuo pipefail
+          exact_image="${IMAGE}@${CANDIDATE_DIGEST}"
+          docker pull "$exact_image"
+          docker save "$exact_image" | zstd -T0 -10 -o image.tar.zst
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            "$SYFT_IMAGE" "docker:${exact_image}" -o cyclonedx-json > sbom.cdx.json
+          jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' sbom.cdx.json
+
+      - name: Reject an immutable source-tag collision before signing
+        id: final_tag
+        env:
+          CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          final_image="${IMAGE}:sha-${SOURCE_SHA}"
+          if existing="$(docker buildx imagetools inspect "$final_image" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+            test "$existing" = "$CANDIDATE_DIGEST"
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v3
+
+      - name: Sign the passing immutable digest with GitHub OIDC
+        if: steps.final_tag.outputs.exists != 'true'
+        env:
+          CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
+          SIGNING_IDENTITY: https://github.com/appolon1908-hue/telnexa/.github/workflows/release.yml@refs/heads/main
+          OIDC_ISSUER: https://token.actions.githubusercontent.com
+        run: |
+          set -Eeuo pipefail
+          exact_image="${IMAGE}@${CANDIDATE_DIGEST}"
+          if ! cosign verify \
+            --certificate-identity "$SIGNING_IDENTITY" \
+            --certificate-oidc-issuer "$OIDC_ISSUER" \
+            "$exact_image" >/dev/null 2>&1; then
+            cosign sign --yes "$exact_image"
+          fi
+
+      - name: Attest the passing immutable digest
+        if: steps.final_tag.outputs.exists != 'true'
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Independently verify signing identity and bind evidence
+        env:
+          CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
+          SIGNING_IDENTITY: https://github.com/appolon1908-hue/telnexa/.github/workflows/release.yml@refs/heads/main
+          OIDC_ISSUER: https://token.actions.githubusercontent.com
+        run: |
+          set -Eeuo pipefail
+          exact_image="${IMAGE}@${CANDIDATE_DIGEST}"
+          cosign verify \
+            --certificate-identity "$SIGNING_IDENTITY" \
+            --certificate-oidc-issuer "$OIDC_ISSUER" \
+            "$exact_image" > signature-verification.json
+          jq -e 'length > 0' signature-verification.json
+          echo "$SOURCE_SHA" > SOURCE_SHA
+          echo "$CANDIDATE_DIGEST" > IMAGE_DIGEST
+          echo "${IMAGE}:sha-${SOURCE_SHA}" > IMAGE_REF
+          sha256sum SOURCE_SHA IMAGE_DIGEST IMAGE_REF signature-verification.json sbom.cdx.json image.tar.zst > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Promote only the fully certified digest to the immutable source tag
+        env:
+          CANDIDATE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -Eeuo pipefail
+          exact_image="${IMAGE}@${CANDIDATE_DIGEST}"
+          final_image="${IMAGE}:sha-${SOURCE_SHA}"
+          if existing="$(docker buildx imagetools inspect "$final_image" --format '{{.Manifest.Digest}}' 2>/dev/null)"; then
+            test "$existing" = "$CANDIDATE_DIGEST"
+          else
+            docker buildx imagetools create --tag "$final_image" "$exact_image"
+          fi
+          final_digest="$(docker buildx imagetools inspect "$final_image" --format '{{.Manifest.Digest}}')"
+          test "$final_digest" = "$CANDIDATE_DIGEST"
 
       - name: Upload certification evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: telnexa-release-${{ github.sha }}
+          name: telnexa-${{ matrix.name }}-release-${{ github.sha }}
           if-no-files-found: error
           retention-days: 90
           path: |
             SOURCE_SHA
             IMAGE_DIGEST
+            IMAGE_REF
+            signature-verification.json
             sbom.cdx.json
             image.tar.zst
             SHA256SUMS

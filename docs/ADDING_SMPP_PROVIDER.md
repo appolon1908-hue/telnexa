@@ -68,7 +68,7 @@ Apply destination, group, user, and source-address filters before static routes 
 
 ## 4. Delivery receipts
 
-Outbound middleware requests should set `dlr=yes`, `dlr-level=2` (SMSC receipt) or `3` (submit plus SMSC receipt), `dlr-method=POST`, and `dlr-url=http://webhook-relay:8080/events/dlr?source_key_id=jasmin-primary&source_token=PROTECTED_PROVIDER_SOURCE_TOKEN`. Read the token from the root-owned provider source-token file only while configuring Jasmin; never print it, commit it, or retain it in evidence. The relay strips the authentication fields, signs, and forwards callbacks to `<WEBHOOK_TARGET_BASE_URL>/webhooks/sms/dlr`. Treat `UNDELIV`, `REJECTD`, `EXPIRED`, and equivalent terminal states as failed events in middleware; the relay also exposes `/events/failed` for normalized failure producers.
+The Telnexa-owned adapter sets `dlr=yes`, `dlr-level=3`, `dlr-method=POST`, and `dlr-url=http://webhook-relay:8080/events/dlr?source_key_id=jasmin-primary&source_token=PROTECTED_PROVIDER_SOURCE_TOKEN` at runtime from protected secret files. The relay strips source credentials, signs the normalized callback, and forwards it only to Telnexa's private `/internal/v1/provider-events/jasmin` durable inbox. Telnexa applies DLR/MO business state before its durable outbox notifies Middleware or customers. Middleware must not hold Jasmin credentials or receive Jasmin callbacks directly.
 
 ## 5. Unicode, multipart, and sender rules
 

@@ -49,3 +49,5 @@ Jasmin balance and submit-count quotas are safety limits, not a full billing led
 ## Future customer SMPP
 
 Port 2775 is not published by default. Prefer VPN/private connectivity. If direct SMPP is approved, add a narrowly bound host mapping and host firewall allowlist for fixed customer source IPs; never publish it globally. Configure maximum bindings, TPS, credentials, source/destination restrictions, and billing before opening access.
+
+The public control API may create disabled SMPP account metadata, but it fails closed with `409 smpp_runtime_provisioning_required` if activation is requested. Do not mark an account enabled until a reviewed provisioner has applied and read back the matching Jasmin user, quotas, bind limits, and network allowlist. This gate prevents database state from claiming that unusable credentials are active.

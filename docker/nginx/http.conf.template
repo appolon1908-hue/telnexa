@@ -2,8 +2,8 @@ limit_req_zone $binary_remote_addr zone=sms_api:10m rate=20r/s;
 log_format telnexa_noargs '$remote_addr [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent';
 
 server {
-    listen 80 default_server;
-    server_name ${SMS_DOMAIN} ${API_DOMAIN} ${PORTAL_DOMAIN} ${ADMIN_DOMAIN};
+    listen 8080 default_server;
+    server_name ${SMS_DOMAIN} ${API_DOMAIN} ${PORTAL_DOMAIN} ${ADMIN_DOMAIN} ${STATUS_DOMAIN};
     server_tokens off;
     access_log /var/log/nginx/access.log telnexa_noargs;
 
