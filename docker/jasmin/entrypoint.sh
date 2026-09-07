@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 if [ ! -f /etc/jasmin/jasmin.cfg ]; then
   cp -a /opt/telnexa-default-config/. /etc/jasmin/

@@ -1,5 +1,7 @@
 import secrets
 import uuid
+import base64
+import binascii
 import os
 import io
 import csv
@@ -10,25 +12,32 @@ from pathlib import Path
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from datetime import datetime, timezone
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import FastAPI, Depends, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
-from .db import Base, engine, session
+from .db import SessionLocal, session
 from .models import (
     ApiKey,
     Audit,
     BillingAccount,
+    Campaign,
     Contact,
     Invoice,
     LedgerEntry,
     Message,
     Sender,
+    ServiceAccount,
+    Tenant,
     Usage,
     Wallet,
 )
-from .engine import send_simulated, credit
+from .engine import credit
+from .dispatch import accept_message
+from .provider_events import ingest, verify_signature
+from .production_gates import production_enabled, reserve_canary
+from .sms_metrics import CANARY_REMAINING, DISPATCH_JOBS, SUBMISSION_UNKNOWN, UNMATCHED_EVENTS
 from .schemas import SendRequest, CreditRequest
 from .oidc import validate_bearer
 
@@ -38,10 +47,20 @@ app = FastAPI(
     docs_url="/developer/openapi",
     openapi_url="/api/v1/openapi.json",
 )
-Base.metadata.create_all(engine)
 SENDS = Counter("telnexa_billing_sends_total", "Billing sends", ["status"])
 DUPES = Counter("telnexa_billing_idempotent_duplicates_total", "Duplicate requests")
 ph = PasswordHasher()
+
+
+class AuthenticatedTenant(str):
+    """Tenant identifier carrying the authenticated caller's stable identity."""
+
+    caller_identity: str
+
+    def __new__(cls, tenant_id: str, caller_identity: str):
+        value = str.__new__(cls, tenant_id)
+        value.caller_identity = caller_identity
+        return value
 
 
 @app.middleware("http")
@@ -54,7 +73,7 @@ async def security(request, call_next):
             "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY",
             "Referrer-Policy": "same-origin",
-            "Content-Security-Policy": "default-src 'self'; connect-src 'self' https://auth.codestra.co; style-src 'self' 'unsafe-inline'",
+            "Content-Security-Policy": "default-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'",
             "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
         }
     )
@@ -70,7 +89,41 @@ def authn(required="read"):
     ):
         principal = validate_bearer(authorization, x_tenant_id, required)
         if principal:
-            return x_tenant_id
+            subject = principal.get("subject") or principal["account_id"]
+            return AuthenticatedTenant(x_tenant_id, f"oidc:{subject}")
+        aliases = {
+            "read": {"read", "sms.read", "billing.read"},
+            "messages:write": {"messages:write", "sms.send"},
+            "bulk:write": {"bulk:write", "sms.bulk"},
+        }
+        if authorization and authorization.startswith("Basic "):
+            try:
+                encoded = authorization[6:]
+                if not encoded or len(encoded) > 512:
+                    raise ValueError("invalid basic credential size")
+                decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+                client_id, separator, client_secret = decoded.partition(":")
+                if not separator or not client_id or not client_secret:
+                    raise ValueError("invalid basic credential")
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                raise HTTPException(401, "invalid_service_account")
+            service = db.scalar(
+                select(ServiceAccount).where(
+                    ServiceAccount.tenant_id == x_tenant_id,
+                    ServiceAccount.client_id == client_id,
+                    ServiceAccount.enabled == True,
+                )
+            )
+            try:
+                if not service:
+                    raise VerifyMismatchError
+                ph.verify(service.secret_hash, client_secret)
+            except VerifyMismatchError:
+                raise HTTPException(401, "invalid_service_account")
+            scopes = set(service.scopes.split())
+            if "admin" not in scopes and not scopes.intersection(aliases.get(required, {required})):
+                raise HTTPException(403, "insufficient_scope")
+            return AuthenticatedTenant(x_tenant_id, f"service-account:{service.id}")
         if not x_api_key:
             raise HTTPException(401, "authentication_required")
         row = db.scalar(
@@ -87,16 +140,11 @@ def authn(required="read"):
         except VerifyMismatchError:
             raise HTTPException(401, "invalid_api_key")
         scopes = set(row.scopes.split())
-        aliases = {
-            "read": {"read", "sms.read", "billing.read"},
-            "messages:write": {"messages:write", "sms.send"},
-            "bulk:write": {"bulk:write", "sms.bulk"},
-        }
         if "admin" not in scopes and not scopes.intersection(aliases.get(required, {required})):
             raise HTTPException(403, "insufficient_scope")
         row.last_used_at = datetime.now(timezone.utc)
         db.commit()
-        return x_tenant_id
+        return AuthenticatedTenant(x_tenant_id, f"api-key:{row.id}")
 
     return dependency
 
@@ -122,7 +170,15 @@ def ready(db: Session = Depends(session)):
 @app.get("/readyz")
 def readyz(db: Session = Depends(session)):
     db.execute(select(1))
-    return {"status": "ready"}
+    if production_enabled():
+        from .dispatch_worker import validate_provider_credentials
+
+        try:
+            validated = validate_provider_credentials(db)
+        except RuntimeError as exc:
+            raise HTTPException(503, str(exc))
+        return {"status": "ready", "provider_credentials": {key: "readable" for key in validated}}
+    return {"status": "ready", "production_sms": "disabled"}
 
 
 @app.get("/version")
@@ -144,6 +200,37 @@ def metrics(authorization: str = Header(default="")):
     supplied = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
     if not expected or not hmac.compare_digest(supplied, expected):
         raise HTTPException(404, "not_found")
+    with SessionLocal() as db:
+        from .models import SmsDispatchJob, SmsProductionCanaryGate, SmsReconciliationCase
+
+        for state, count in db.execute(
+            select(SmsDispatchJob.state, func.count()).group_by(SmsDispatchJob.state)
+        ).all():
+            DISPATCH_JOBS.labels(state).set(count)
+        SUBMISSION_UNKNOWN.set(
+            db.scalar(
+                select(func.count())
+                .select_from(Message)
+                .where(Message.status == "submission_unknown")
+            )
+        )
+        UNMATCHED_EVENTS.set(
+            db.scalar(
+                select(func.count())
+                .select_from(SmsReconciliationCase)
+                .where(
+                    SmsReconciliationCase.case_type == "unmatched_provider_event",
+                    SmsReconciliationCase.state == "open",
+                )
+            )
+        )
+        remaining = sum(
+            max(0, g.max_submissions - g.reserved_count)
+            for g in db.scalars(
+                select(SmsProductionCanaryGate).where(SmsProductionCanaryGate.enabled == True)
+            ).all()
+        )
+        CANARY_REMAINING.set(remaining)
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -158,6 +245,9 @@ def send(
     account = db.get(BillingAccount, body.billing_account_id)
     if not account or account.tenant_id != tenant_id:
         raise HTTPException(404, "billing_account_not_found")
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant or tenant.status != "active":
+        raise HTTPException(403, "tenant_inactive")
     request_hash = hashlib.sha256(
         json.dumps(body.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -196,17 +286,33 @@ def send(
     )
     if not sender or sender.status != "approved":
         raise HTTPException(409, "sender_not_approved")
+    if production_enabled():
+        if body.campaign_id:
+            campaign = db.scalar(
+                select(Campaign).where(
+                    Campaign.id == body.campaign_id, Campaign.tenant_id == tenant_id
+                )
+            )
+            if not campaign or campaign.status != "approved":
+                raise HTTPException(403, "campaign_not_approved")
+        canary_gate = reserve_canary(db, tenant_id, body.sender, body.destination)
+        if not canary_gate:
+            db.rollback()
+            raise HTTPException(403, "production_canary_gate_denied")
+    else:
+        canary_gate = None
     try:
-        msg = send_simulated(
+        msg = accept_message(
             db,
             account.id,
             body.destination,
-            body.sender,
+            sender,
             body.content,
+            body.category,
             idempotency_key,
             x_correlation_id or str(uuid.uuid4()),
-            body.simulator_outcome,
             request_hash=request_hash,
+            canary_gate_id=canary_gate.id if canary_gate else None,
         )
         db.commit()
         SENDS.labels(msg.status).inc()
@@ -227,7 +333,45 @@ def message_json(m):
         "estimated_charge": str(m.estimated_sell_amount),
         "provider_message_id": m.provider_message_id,
         "simulated": m.provider == "simulator",
+        "correlation_id": m.correlation_id,
+        "route_state": "eligible" if m.status in {"accepted", "queued"} else m.status,
     }
+
+
+@app.post("/internal/v1/provider-events/jasmin", status_code=202)
+async def provider_event(
+    request: Request,
+    x_telnexa_timestamp: str = Header(...),
+    x_telnexa_event_id: str = Header(...),
+    x_telnexa_signature: str = Header(...),
+    x_key_id: str = Header(...),
+    db: Session = Depends(session),
+):
+    body = await request.body()
+    if len(body) > 1048576:
+        raise HTTPException(413, "provider_event_too_large")
+    try:
+        secret = Path(os.environ["TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE"]).read_bytes().strip()
+    except (KeyError, OSError):
+        raise HTTPException(503, "provider_event_identity_unavailable")
+    if not verify_signature(
+        secret,
+        "POST",
+        request.url.path,
+        x_telnexa_timestamp,
+        x_telnexa_event_id,
+        body,
+        x_telnexa_signature,
+    ):
+        raise HTTPException(401, "invalid_provider_event_signature")
+    try:
+        payload = json.loads(body)
+        row, duplicate = ingest(db, x_key_id, x_telnexa_event_id, body, payload)
+        db.commit()
+    except (ValueError, json.JSONDecodeError) as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc))
+    return {"event_id": row.event_id, "accepted": True, "duplicate": duplicate}
 
 
 @app.get("/api/v1/messages")
@@ -461,7 +605,9 @@ def create_key(tenant_id: str, x_admin_token: str = Header(...), db: Session = D
 
 
 @app.delete("/api/v1/api-keys/{key_id}")
-def revoke_key(key_id: str, tenant_id: str = Depends(authn()), db: Session = Depends(session)):
+def revoke_key(
+    key_id: str, tenant_id: str = Depends(authn("admin")), db: Session = Depends(session)
+):
     row = db.scalar(select(ApiKey).where(ApiKey.id == key_id, ApiKey.tenant_id == tenant_id))
     if not row:
         raise HTTPException(404, "api_key_not_found")
@@ -534,10 +680,6 @@ def portal_js():
         media_type="application/javascript",
         headers={"Cache-Control": "no-store"},
     )
-    response.body = response.body.replace(
-        b"/auth/realms/telnexa", b"https://auth.codestra.co/realms/codestra"
-    )
-    response.headers["Content-Length"] = str(len(response.body))
     return response
 
 
@@ -602,3 +744,6 @@ from .auth_api import router as auth_router
 
 app.include_router(product_router)
 app.include_router(auth_router)
+from .canonical_api import router as canonical_router
+
+app.include_router(canonical_router)
