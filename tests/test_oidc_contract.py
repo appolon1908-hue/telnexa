@@ -1,5 +1,6 @@
 """Offline, real-signature regressions for separate portal and machine trusts."""
 
+import base64
 import json
 import time
 from io import BytesIO
@@ -64,8 +65,7 @@ def test_canonical_machine_identity_and_readback(identity):
     assert result["tenant_id"] == "tenant-a"
     assert result["account_id"] == "account-a"
     assert result["roles"] == []
-    assert authenticate(identity(), scope="read") == result
-    assert authenticate(identity(), scope="sms.read") == result
+    assert authenticate(identity(), scope="sms.status.read") == result
     assert authenticate(identity(), scope="messages:write") == result
 
 
@@ -220,3 +220,22 @@ def test_expired_key_cache_does_not_fail_open(identity, monkeypatch):
     with pytest.raises(HTTPException) as error:
         authenticate(identity())
     assert error.value.status_code == 503
+
+
+@pytest.mark.parametrize("required", ["read", "sms.read"])
+@pytest.mark.parametrize("scopes", ["sms.status.read", "read sms.read sms.status.read *"])
+def test_status_token_cannot_satisfy_generic_tenant_reads(identity, required, scopes):
+    with pytest.raises(HTTPException) as error:
+        authenticate(identity({"scope": scopes}), scope=required)
+    assert error.value.status_code == 403
+    assert error.value.detail == "explicit_machine_read_scope_required"
+
+
+def test_deeply_nested_untrusted_payload_returns_401():
+    payload = base64.urlsafe_b64encode(("[" * 2000 + "]" * 2000).encode()).decode().rstrip("=")
+    token = "e30." + payload + ".signature"
+    assert len(token) < machine.MAX_TOKEN_BYTES
+    with pytest.raises(HTTPException) as error:
+        authenticate(token)
+    assert error.value.status_code == 401
+    assert error.value.detail == "invalid_access_token"
