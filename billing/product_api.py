@@ -37,6 +37,10 @@ from .models import (
     Subaccount,
     ConsentRecord,
     BillingAccount,
+    SmsDispatchJob,
+    SmsProviderEventInbox,
+    SmsProductionCanaryGate,
+    SmsReconciliationCase,
 )
 from .webhooks import encrypt_secret, validate_webhook_url
 from .oidc import validate_bearer
@@ -686,6 +690,187 @@ def route_preview(
         ),
         "dry_run": True,
     }
+
+
+def require_admin(token):
+    import os
+
+    if not secrets.compare_digest(token, os.environ.get("BILLING_ADMIN_TOKEN", "disabled")):
+        raise HTTPException(403, "forbidden")
+
+
+@router.get("/admin/providers")
+def admin_providers(x_admin_token: str = Header(...), db: Session = Depends(session)):
+    require_admin(x_admin_token)
+    return {
+        "items": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "adapter_type": p.adapter_type,
+                "environment": p.environment,
+                "state": p.state,
+                "routing_enabled": p.routing_enabled,
+                "circuit_state": p.circuit_state,
+                "health_score": p.health_score,
+            }
+            for p in db.scalars(select(Provider)).all()
+        ]
+    }
+
+
+@router.get("/admin/providers/{provider_id}")
+def admin_provider(
+    provider_id: str, x_admin_token: str = Header(...), db: Session = Depends(session)
+):
+    require_admin(x_admin_token)
+    p = db.get(Provider, provider_id)
+    if not p:
+        raise HTTPException(404, "provider_not_found")
+    return {
+        "id": p.id,
+        "name": p.name,
+        "adapter_type": p.adapter_type,
+        "credential_reference": p.credential_reference,
+        "environment": p.environment,
+        "base_url": p.base_url,
+        "state": p.state,
+        "routing_enabled": p.routing_enabled,
+        "circuit_state": p.circuit_state,
+        "health_score": p.health_score,
+        "failure_streak": p.failure_streak,
+    }
+
+
+@router.get("/admin/providers/{provider_id}/health")
+def admin_provider_health(
+    provider_id: str, x_admin_token: str = Header(...), db: Session = Depends(session)
+):
+    require_admin(x_admin_token)
+    p = db.get(Provider, provider_id)
+    if not p:
+        raise HTTPException(404, "provider_not_found")
+    return {
+        "provider_id": p.id,
+        "health_score": p.health_score,
+        "circuit_state": p.circuit_state,
+        "last_success_at": p.last_success_at,
+        "last_failure_at": p.last_failure_at,
+    }
+
+
+@router.post("/admin/providers/{provider_id}/circuit/{action}")
+def admin_provider_circuit(
+    provider_id: str, action: str, x_admin_token: str = Header(...), db: Session = Depends(session)
+):
+    require_admin(x_admin_token)
+    if action not in {"open", "close"}:
+        raise HTTPException(404, "unsupported_action")
+    p = db.get(Provider, provider_id)
+    if not p:
+        raise HTTPException(404, "provider_not_found")
+    p.circuit_state = "open" if action == "open" else "closed"
+    db.commit()
+    return {"provider_id": p.id, "circuit_state": p.circuit_state}
+
+
+@router.get("/admin/dispatch/jobs")
+def admin_dispatch_jobs(x_admin_token: str = Header(...), db: Session = Depends(session)):
+    require_admin(x_admin_token)
+    return {
+        "items": [
+            {
+                "id": j.id,
+                "message_id": j.message_id,
+                "tenant_id": j.tenant_id,
+                "state": j.state,
+                "attempt_count": j.attempt_count,
+                "available_at": j.available_at,
+            }
+            for j in db.scalars(
+                select(SmsDispatchJob).order_by(SmsDispatchJob.created_at.desc()).limit(200)
+            ).all()
+        ]
+    }
+
+
+@router.get("/admin/provider-events")
+def admin_provider_events(x_admin_token: str = Header(...), db: Session = Depends(session)):
+    require_admin(x_admin_token)
+    return {
+        "items": [
+            {
+                "id": x.id,
+                "source": x.source,
+                "event_id": x.event_id,
+                "event_type": x.event_type,
+                "state": x.state,
+                "message_id": x.message_id,
+            }
+            for x in db.scalars(
+                select(SmsProviderEventInbox)
+                .order_by(SmsProviderEventInbox.received_at.desc())
+                .limit(200)
+            ).all()
+        ]
+    }
+
+
+@router.get("/admin/reconciliation")
+def admin_reconciliation(x_admin_token: str = Header(...), db: Session = Depends(session)):
+    require_admin(x_admin_token)
+    return {
+        "items": [
+            {
+                "id": x.id,
+                "tenant_id": x.tenant_id,
+                "message_id": x.message_id,
+                "case_type": x.case_type,
+                "state": x.state,
+                "evidence": x.evidence,
+            }
+            for x in db.scalars(
+                select(SmsReconciliationCase)
+                .order_by(SmsReconciliationCase.created_at.desc())
+                .limit(200)
+            ).all()
+        ]
+    }
+
+
+@router.get("/admin/send-gates")
+def admin_send_gates(x_admin_token: str = Header(...), db: Session = Depends(session)):
+    require_admin(x_admin_token)
+    return {
+        "items": [
+            {
+                "id": g.id,
+                "gate_key": g.gate_key,
+                "stage": g.stage,
+                "allowed_tenant": g.allowed_tenant,
+                "allowed_sender": g.allowed_sender,
+                "allowed_destinations": g.allowed_destinations,
+                "max_submissions": g.max_submissions,
+                "reserved_count": g.reserved_count,
+                "claimed_count": g.claimed_count,
+                "expires_at": g.expires_at,
+                "enabled": g.enabled,
+            }
+            for g in db.scalars(select(SmsProductionCanaryGate)).all()
+        ]
+    }
+
+
+@router.post("/admin/send-gates/{gate_id}/close")
+def close_send_gate(gate_id: str, x_admin_token: str = Header(...), db: Session = Depends(session)):
+    require_admin(x_admin_token)
+    gate = db.get(SmsProductionCanaryGate, gate_id)
+    if not gate:
+        raise HTTPException(404, "gate_not_found")
+    gate.enabled = False
+    gate.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"id": gate.id, "enabled": False}
 
 
 @router.get("/admin/finance/summary")

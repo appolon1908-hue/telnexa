@@ -2,9 +2,25 @@
 set -euo pipefail
 [[ "$EUID" -eq 0 ]] || { echo "Run with sudo so runtime credentials are root-owned." >&2; exit 1; }
 repo=$(cd "$(dirname "$0")/.." && pwd)
+source_sha=$(git -c safe.directory="$repo" -C "$repo" rev-parse HEAD)
+[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve exact source SHA." >&2; exit 1; }
+git -c safe.directory="$repo" -C "$repo" diff --quiet HEAD -- || {
+  echo "Refusing to bind production provenance to a modified tracked worktree." >&2
+  exit 1
+}
 env_file="$repo/.env"
 secret_dir="${TELNEXA_RUNTIME_SECRET_DIR:-/etc/telnexa/secrets}"
+case "$secret_dir" in
+  /etc/telnexa/secrets | /opt/telnexa/secrets) ;;
+  *) echo "Runtime secret directory is outside the approved Telnexa roots" >&2; exit 1 ;;
+esac
 install -d -o root -g root -m 0700 "$secret_dir"
+keycloak_secret_dir="$repo/.secrets"
+install -d -o root -g root -m 0700 "$keycloak_secret_dir"
+for file in keycloak_admin_password keycloak_db_password; do
+  [[ -s "$keycloak_secret_dir/$file" ]] \
+    || openssl rand -base64 36 | install -o root -g root -m 0600 /dev/stdin "$keycloak_secret_dir/$file"
+done
 test -f "$env_file" || cp "$repo/.env.example" "$env_file"
 chmod 0600 "$env_file"
 for key in RABBITMQ_PASSWORD REDIS_PASSWORD JASMIN_ADMIN_PASSWORD JASMIN_API_PASSWORD WEBHOOK_HMAC_SECRET BILLING_DB_PASSWORD BILLING_JWT_SECRET BILLING_ADMIN_TOKEN BILLING_MIDDLEWARE_API_KEY BILLING_MIDDLEWARE_HMAC_SECRET GRAFANA_ADMIN_PASSWORD; do
@@ -27,11 +43,22 @@ done
 metrics_file="$secret_dir/metrics-token"
 provider_token_file="$secret_dir/provider-source-token"
 provider_registry_file="$secret_dir/provider-keys.json"
+provider_event_hmac_file="$secret_dir/provider-event-hmac"
+jasmin_username_file="$secret_dir/jasmin-http-username"
+jasmin_password_file="$secret_dir/jasmin-http-password"
+jasmin_dlr_token_file="$secret_dir/jasmin-dlr-token"
 [[ -s "$metrics_file" ]] || openssl rand -hex 32 | install -o root -g root -m 0600 /dev/stdin "$metrics_file"
 [[ -s "$provider_token_file" ]] || openssl rand -hex 32 | install -o root -g root -m 0600 /dev/stdin "$provider_token_file"
 provider_digest=$(sha256sum "$provider_token_file" | awk '{print $1}')
 printf '{"keys":[{"id":"jasmin-primary","enabled":true,"sha256":"%s"}]}\n' "$provider_digest" |
   install -o root -g root -m 0600 /dev/stdin "$provider_registry_file"
+sed -n 's/^WEBHOOK_HMAC_SECRET=//p' "$env_file" |
+  install -o root -g root -m 0600 /dev/stdin "$provider_event_hmac_file"
+sed -n 's/^JASMIN_API_USER=//p' "$env_file" |
+  install -o root -g root -m 0600 /dev/stdin "$jasmin_username_file"
+sed -n 's/^JASMIN_API_PASSWORD=//p' "$env_file" |
+  install -o root -g root -m 0600 /dev/stdin "$jasmin_password_file"
+install -o root -g root -m 0600 "$provider_token_file" "$jasmin_dlr_token_file"
 set_value() {
   local key=$1 value=$2 escaped
   escaped=$(printf '%s' "$value" | sed 's/[&|]/\\&/g')
@@ -40,7 +67,12 @@ set_value() {
 }
 set_value TELNEXA_PROVIDER_KEYS_FILE "$provider_registry_file"
 set_value TELNEXA_METRICS_TOKEN_FILE "$metrics_file"
+set_value TELNEXA_PROVIDER_EVENT_HMAC_FILE "$provider_event_hmac_file"
+set_value TELNEXA_JASMIN_HTTP_USERNAME_FILE "$jasmin_username_file"
+set_value TELNEXA_JASMIN_HTTP_PASSWORD_FILE "$jasmin_password_file"
+set_value TELNEXA_JASMIN_DLR_TOKEN_FILE "$jasmin_dlr_token_file"
 set_value OIDC_ALLOWED_AZP "${OIDC_ALLOWED_AZP:-telnexa-portal}"
+set_value SOURCE_SHA "$source_sha"
 chown root:root "$env_file"
 chmod 0600 "$env_file"
 echo "Generated root-owned runtime credentials and .env without displaying secret values."

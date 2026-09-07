@@ -20,3 +20,32 @@ groups:
         for: 10m
         labels: {severity: critical}
         annotations: {summary: "Telnexa root filesystem has less than 15% free"}
+      - alert: TelnexaSmsDispatchBacklog
+        expr: telnexa_sms_dispatch_oldest_seconds > 300
+        for: 5m
+        labels: {severity: critical}
+        annotations: {summary: "The durable SMS dispatch queue is older than five minutes"}
+      - alert: TelnexaSmsProviderCircuitOpen
+        expr: telnexa_sms_provider_circuit_state > 0
+        for: 2m
+        labels: {severity: warning}
+        annotations: {summary: "An SMS provider circuit is open"}
+      - alert: TelnexaSmsSubmissionUnknown
+        expr: increase(telnexa_sms_submission_unknown_total[5m]) > 0
+        labels: {severity: critical}
+        annotations: {summary: "An ambiguous SMS submission requires reconciliation"}
+      - alert: TelnexaSmsUnmatchedProviderEvents
+        expr: telnexa_sms_unmatched_provider_events > 0
+        for: 2m
+        labels: {severity: critical}
+        annotations: {summary: "Provider events cannot be authoritatively correlated"}
+      - alert: TelnexaSmsBillingDrift
+        expr: telnexa_sms_billing_reconciliation_drift > 0
+        for: 2m
+        labels: {severity: critical}
+        annotations: {summary: "SMS billing reconciliation drift was detected"}
+      - alert: TelnexaSmsCanaryExhausted
+        expr: telnexa_sms_canary_remaining == 0
+        for: 1m
+        labels: {severity: warning}
+        annotations: {summary: "An enabled SMS canary has no remaining submissions"}

@@ -29,9 +29,11 @@ def _jwks():
     now = time.monotonic()
     if now - _cache["at"] > 300:
         issuer = os.environ["OIDC_ISSUER"].rstrip("/")
-        with urllib.request.urlopen(
-            issuer + "/protocol/openid-connect/certs", timeout=5
-        ) as response:
+        jwks_url = os.environ.get("OIDC_JWKS_URL", issuer + "/protocol/openid-connect/certs")
+        if jwks_url != "http://keycloak:8080/auth/realms/telnexa/protocol/openid-connect/certs":
+            raise HTTPException(503, "canonical_identity_jwks_unavailable")
+        # The value is compared to the sole private Keycloak URL immediately above.
+        with urllib.request.urlopen(jwks_url, timeout=5) as response:  # nosec B310
             _cache.update(at=now, keys=json.load(response)["keys"])
     return {key["kid"]: key for key in _cache["keys"]}
 
@@ -41,8 +43,8 @@ def validate_bearer(authorization: str | None, tenant_id: str | None, required: 
         return None
     token = authorization[7:]
     issuer = os.environ.get("OIDC_ISSUER", "").rstrip("/")
-    audience = os.environ.get("OIDC_AUDIENCE", "codestra-api")
-    if issuer != "https://auth.codestra.co/realms/codestra":
+    audience = os.environ.get("OIDC_AUDIENCE", "telnexa-api")
+    if issuer != "https://api.telnexa.co/auth/realms/telnexa":
         raise HTTPException(503, "canonical_identity_unavailable")
     try:
         header = jwt.get_unverified_header(token)
