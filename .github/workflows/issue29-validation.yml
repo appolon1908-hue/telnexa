@@ -34,7 +34,7 @@ jobs:
           POSTGRES_DB: telnexa_issue29_ci
         ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U telnexa_ci -d telnexa_issue29_ci'
+          --health-cmd "pg_isready -U telnexa_ci -d telnexa_issue29_ci"
           --health-interval 5s --health-timeout 5s --health-retries 12
     env:
       SOURCE_SHA: ${{ matrix.revision == 'source' && github.event.pull_request.head.sha || github.sha }}
