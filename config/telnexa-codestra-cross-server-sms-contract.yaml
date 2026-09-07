@@ -2,6 +2,17 @@ version: 1
 name: telnexa-codestra-cross-server-sms
 status: planning_authority
 
+source_reconciliation:
+  date: '2026-09-07'
+  runtime_verified: false
+  source_merge_authorizes_deployment: false
+  notes: >-
+    This reconciled contract takes precedence over historical ownership, identity
+    and endpoint assumptions in the accompanying planning blueprints. Host/network
+    mappings require fresh runtime evidence. Preferred Middleware paths are design
+    targets, not a statement that those routes are deployed. Current protected
+    runtime code and generated OpenAPI remain the implemented API authority.
+
 hosts:
   server_a:
     public_ip: 65.109.65.169
@@ -19,11 +30,20 @@ hosts:
 
 repositories:
   telnexa: appolon1908-hue/telnexa
-  middleware: Codestra-SRL/codestra-middleware
+  middleware: appolon1908-hue/Middleware-
   platform: appolon1908-hue/codestra-production-platform
 
 canonical_identity:
   issuer: https://auth.codestra.co/realms/codestra
+  audience: telnexa-gateway
+  purpose: machine_to_machine_only
+  default_enabled: false
+  max_token_lifetime_seconds: 300
+  caller_allowlist_required: true
+  tenant_and_account_binding_required: true
+  local_portal_issuer: https://api.telnexa.co/auth/realms/telnexa
+  local_portal_audience: telnexa-api
+  replaces_local_portal_authority: false
 
 architecture:
   outbound:
@@ -68,11 +88,11 @@ middleware_api:
   message:
     method: GET
     preferred_path: /v1/messages/sms/{message_id}
-    scope: sms.read
+    scope: sms.status.read
   events:
     method: GET
     preferred_path: /v1/messages/sms/{message_id}/events
-    scope: sms.read
+    scope: sms.status.read
   telnexa_event_receiver:
     method: POST
     preferred_path: /v1/internal/events/telnexa/sms
@@ -89,9 +109,18 @@ telnexa_api:
   message:
     method: GET
     path: /api/v1/messages/{message_id}
+    scope: sms.status.read
   events:
     method: GET
     path: /api/v1/messages/{message_id}/events
+    scope: sms.status.read
+  provider_event_inbox:
+    method: POST
+    path: /internal/v1/provider-events/jasmin
+    exposure: private
+    authenticated_source_required: true
+    signed_raw_body_required: true
+    provider_callback_may_select_tenant: false
 
 sms_event_types:
   - sms.accepted
@@ -134,13 +163,13 @@ telnexa_storage:
 security:
   middleware_to_telnexa:
     transport: private
-    mtls: preferred_required_when_platform_contract_supports
+    mtls: required_for_cross_server_production
     service_identity: dedicated
     scope: sms.send
     jasmin_credentials: forbidden
   telnexa_to_middleware:
     transport: private
-    mtls: preferred_required_when_platform_contract_supports
+    mtls: required_for_cross_server_production
     signed_events: true
     timestamp_validation: true
     event_id_replay_protection: true
@@ -184,8 +213,11 @@ retry_rules:
   same_logical_request_uses_same_idempotency_key: true
   policy_4xx_retry: false
   bounded_5xx_retry: true
+  bounded_5xx_retry_requires_same_idempotency_and_no_provider_resubmit: true
   middleware_may_fallback_to_jasmin: false
   ambiguous_submission_failover: false
+  ambiguous_submission_resubmit: false
+  authoritative_readback_before_resolution: true
 
 billing:
   segment_authority: telnexa
