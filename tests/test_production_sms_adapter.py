@@ -456,6 +456,16 @@ def test_shared_tps_denies_twenty_worker_race():
 
 
 def _mo_row(db, tenant, event_id, keyword, occurred_at):
+    from billing.sms_integration import SmsInboundBinding
+
+    if not db.get(SmsInboundBinding, ("key", "+498765432")):
+        number = db.query(PhoneNumber).filter_by(tenant_id=tenant.id, number="+498765432").one()
+        db.add(
+            SmsInboundBinding(
+                source_key_id="key", destination=number.number, number_id=number.id, enabled=True
+            )
+        )
+        db.flush()
     row = SmsProviderEventInbox(
         source="jasmin",
         source_key_id="key",

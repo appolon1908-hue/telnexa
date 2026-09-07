@@ -13,7 +13,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from datetime import datetime, timezone
 from fastapi import FastAPI, Depends, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, JSONResponse
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -37,11 +37,19 @@ from .models import (
 from .engine import credit
 from .dispatch import accept_message
 from .message_idempotency import lock_message_key, recover_message_insert_race
-from .provider_events import ingest, verify_signature
+from .provider_events import ingest, parse_payload, verify_signature
 from .production_gates import production_enabled, reserve_canary
 from .sms_metrics import CANARY_REMAINING, DISPATCH_JOBS, SUBMISSION_UNKNOWN, UNMATCHED_EVENTS
 from .schemas import SendRequest, CreditRequest
 from .oidc import validate_bearer
+from .bounded_body import BoundedBodyMiddleware
+from .sms_integration import (
+    bounded_reference,
+    enforce_admission,
+    readback_by_key,
+    replay_receipt,
+    store_receipt,
+)
 
 app = FastAPI(
     title="Telnexa Commercial API",
@@ -52,6 +60,7 @@ app = FastAPI(
 SENDS = Counter("telnexa_billing_sends_total", "Billing sends", ["status"])
 DUPES = Counter("telnexa_billing_idempotent_duplicates_total", "Duplicate requests")
 ph = PasswordHasher()
+app.add_middleware(BoundedBodyMiddleware)
 
 
 class AuthenticatedTenant(str):
@@ -96,6 +105,7 @@ def authn(required="read"):
         aliases = {
             "read": {"read", "sms.read", "billing.read"},
             "messages:write": {"messages:write", "sms.send"},
+            "sms.status.read": {"sms.status.read", "sms.read"},
             "bulk:write": {"bulk:write", "sms.bulk"},
         }
         if authorization and authorization.startswith("Basic "):
@@ -244,6 +254,9 @@ def send(
     tenant_id: str = Depends(authn("messages:write")),
     db: Session = Depends(session),
 ):
+    bounded_reference(idempotency_key, "idempotency_key", 180)
+    if x_correlation_id is not None:
+        bounded_reference(x_correlation_id, "correlation_id", 36)
     account = db.get(BillingAccount, body.billing_account_id)
     if not account or account.tenant_id != tenant_id:
         raise HTTPException(404, "billing_account_not_found")
@@ -276,7 +289,8 @@ def send(
         if prior.request_hash not in (request_hash, legacy_hash):
             raise HTTPException(409, "idempotency_key_payload_mismatch")
         DUPES.inc()
-        return message_json(prior)
+        return replay_receipt(db, prior)
+    enforce_admission(db, tenant_id, body)
     contact = db.scalar(
         select(Contact).where(Contact.tenant_id == tenant_id, Contact.phone == body.destination)
     )
@@ -317,13 +331,14 @@ def send(
             request_hash=request_hash,
             canary_gate_id=canary_gate.id if canary_gate else None,
         )
+        accepted_response = store_receipt(db, msg, body, message_json(msg))
         db.commit()
         SENDS.labels(msg.status).inc()
-        return message_json(msg)
+        return accepted_response
     except IntegrityError as exc:
         msg = recover_message_insert_race(db, tenant_id, idempotency_key, request_hash, exc)
         DUPES.inc()
-        return message_json(msg)
+        return replay_receipt(db, msg)
     except ValueError as e:
         db.rollback()
         SENDS.labels("rejected").inc()
@@ -345,6 +360,43 @@ def message_json(m):
     }
 
 
+@app.get("/api/v1/messages/by-idempotency")
+def submission_readback(
+    idempotency_key: str = Header(...),
+    tenant_id: str = Depends(authn("sms.status.read")),
+    db: Session = Depends(session),
+):
+    return readback_by_key(db, tenant_id, idempotency_key)
+
+
+@app.get("/api/v1/integration/health")
+def integration_health(
+    tenant_id: str = Depends(authn("sms.health.read")),
+    db: Session = Depends(session),
+):
+    from sqlalchemy.exc import SQLAlchemyError
+    from .sms_integration import SmsAcceptanceReceipt
+    from .models import Provider
+
+    try:
+        db.execute(select(SmsAcceptanceReceipt.message_id).limit(0))
+        db.execute(select(1))
+        configured = db.scalar(select(func.count()).select_from(Provider))
+    except SQLAlchemyError:
+        db.rollback()
+        return JSONResponse({"status": "not_ready", "database": "unavailable"}, 503)
+    return {
+        "status": "ready",
+        "database": "ok",
+        "contract_version": "telnexa.sms.readback.v1",
+        "source_sha": os.environ.get("SOURCE_SHA", "unverified"),
+        "production_sms": production_enabled(),
+        "configured_providers": configured,
+        "provider_connectivity": "not_probed",
+        "runtime_certified": False,
+    }
+
+
 @app.post("/internal/v1/provider-events/jasmin", status_code=202)
 async def provider_event(
     request: Request,
@@ -352,6 +404,7 @@ async def provider_event(
     x_telnexa_event_id: str = Header(...),
     x_telnexa_signature: str = Header(...),
     x_key_id: str = Header(...),
+    x_signature_version: str = Header(default=""),
     db: Session = Depends(session),
 ):
     body = await request.body()
@@ -361,6 +414,10 @@ async def provider_event(
         secret = Path(os.environ["TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE"]).read_bytes().strip()
     except (KeyError, OSError):
         raise HTTPException(503, "provider_event_identity_unavailable")
+    if x_signature_version != "v2":
+        raise HTTPException(401, "provider_signature_v2_required")
+    if len(secret) < 32:
+        raise HTTPException(503, "provider_event_identity_unavailable")
     if not verify_signature(
         secret,
         "POST",
@@ -369,15 +426,17 @@ async def provider_event(
         x_telnexa_event_id,
         body,
         x_telnexa_signature,
+        source_key_id=x_key_id,
     ):
         raise HTTPException(401, "invalid_provider_event_signature")
     try:
-        payload = json.loads(body)
+        payload = parse_payload(body)
         row, duplicate = ingest(db, x_key_id, x_telnexa_event_id, body, payload)
         db.commit()
     except (ValueError, json.JSONDecodeError) as exc:
         db.rollback()
-        raise HTTPException(422, str(exc))
+        status = 409 if str(exc) == "provider_event_replay_payload_mismatch" else 422
+        raise HTTPException(status, str(exc))
     return {"event_id": row.event_id, "accepted": True, "duplicate": duplicate}
 
 

@@ -2,6 +2,7 @@ from pathlib import Path
 from sqlalchemy import text
 from .db import Base, engine
 from . import models  # noqa: F401 - registers complete metadata before create_all
+from . import sms_integration  # noqa: F401 - transactional acceptance receipts
 
 Base.metadata.create_all(engine)
 if engine.dialect.name == "postgresql":

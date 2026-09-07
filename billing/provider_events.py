@@ -1,6 +1,9 @@
 import hashlib
 import hmac
+import json
+import re
 import time
+import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -12,6 +15,8 @@ from .models import (
     CountryPolicy,
     InboundMessage,
     Message,
+    Outbox,
+    Tenant,
     PhoneNumber,
     Provider,
     Route,
@@ -23,13 +28,15 @@ from .models import (
     WebhookDelivery,
 )
 from .state_machine import transition
+from .message_idempotency import lock_message_key
+from .sms_integration import SmsInboundBinding
 
 
 def _queue_webhooks(db, tenant_id, event_id, event_type):
     for hook in db.scalars(
         select(Webhook).where(Webhook.tenant_id == tenant_id, Webhook.enabled == True)
     ).all():
-        if event_type in hook.events and not db.scalar(
+        if (event_type in hook.events or "*" in hook.events) and not db.scalar(
             select(WebhookDelivery).where(
                 WebhookDelivery.webhook_id == hook.id, WebhookDelivery.event_id == event_id
             )
@@ -37,28 +44,37 @@ def _queue_webhooks(db, tenant_id, event_id, event_type):
             db.add(WebhookDelivery(tenant_id=tenant_id, webhook_id=hook.id, event_id=event_id))
 
 
-def signature(secret, method, path, timestamp, event_id, body):
+def signature(secret, method, path, timestamp, event_id, body, source_key_id=None):
     canonical = "\n".join(
         (
-            "v1",
+            "v2" if source_key_id is not None else "v1",
             method.upper(),
             "/" + "/".join(x for x in path.split("/") if x),
             timestamp,
             event_id,
             "telnexa",
+            *([source_key_id] if source_key_id is not None else []),
             hashlib.sha256(body).hexdigest(),
         )
     ).encode()
     return hmac.new(secret, canonical, hashlib.sha256).hexdigest()
 
 
-def verify_signature(secret, method, path, timestamp, event_id, body, supplied, window=300):
+def verify_signature(
+    secret, method, path, timestamp, event_id, body, supplied, window=300, source_key_id=None
+):
     try:
         fresh = abs(int(time.time()) - int(timestamp)) <= window
     except (TypeError, ValueError):
         return False
-    expected = "sha256=" + signature(secret, method, path, timestamp, event_id, body)
-    return fresh and bool(event_id) and hmac.compare_digest(expected, supplied or "")
+    if not secret or not isinstance(supplied, str) or not supplied.isascii():
+        return False
+    if source_key_id is not None and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", source_key_id):
+        return False
+    if not isinstance(event_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", event_id):
+        return False
+    expected = "sha256=" + signature(secret, method, path, timestamp, event_id, body, source_key_id)
+    return fresh and hmac.compare_digest(expected, supplied)
 
 
 def _provider_event_identity(row):
@@ -74,7 +90,59 @@ def _provider_event_identity(row):
     return hashlib.sha256(canonical).hexdigest()
 
 
+def parse_payload(body):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate_provider_field")
+            result[key] = value
+        return result
+
+    try:
+
+        def invalid_constant(value):
+            raise ValueError("invalid_provider_number")
+
+        payload = json.loads(body, object_pairs_hook=unique_object, parse_constant=invalid_constant)
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise ValueError("invalid_provider_payload") from exc
+    if not isinstance(payload, dict) or set(payload) != {"event", "data"}:
+        raise ValueError("invalid_provider_envelope")
+    data = payload["data"]
+    if not isinstance(data, dict) or not 1 <= len(data) <= 40:
+        raise ValueError("invalid_provider_data")
+    if any(
+        not isinstance(key, str)
+        or len(key) > 80
+        or not isinstance(value, (str, int, float, type(None)))
+        or len(str(value)) > 5000
+        for key, value in data.items()
+    ):
+        raise ValueError("invalid_provider_fields")
+    if not isinstance(payload["event"], str) or payload["event"] not in {
+        "dlr",
+        "failed",
+        "inbound",
+    }:
+        raise ValueError("unsupported_provider_event")
+    identifier = data.get("id") or data.get("messageid")
+    if not isinstance(identifier, str) or not 1 <= len(identifier) <= 100:
+        raise ValueError("provider_message_id_required")
+    if payload["event"] == "inbound":
+        for field, alias in (("from", "sender"), ("to", "destination")):
+            value = data.get(field) or data.get(alias)
+            if not isinstance(value, str) or not re.fullmatch(r"\+[1-9][0-9]{5,18}", value):
+                raise ValueError("invalid_inbound_address")
+        if not isinstance(data.get("content"), str):
+            raise ValueError("invalid_inbound_content")
+    return payload
+
+
 def ingest(db, source_key_id, event_id, body, payload):
+    # Serialize each authenticated source/event before read-then-insert; distinct
+    # provider events remain independent, including reused provider-local IDs.
+    lock_message_key(db, "provider:" + source_key_id, event_id)
     prior = db.scalar(
         select(SmsProviderEventInbox).where(
             SmsProviderEventInbox.source_key_id == source_key_id,
@@ -96,8 +164,12 @@ def ingest(db, source_key_id, event_id, body, payload):
             if occurred
             else datetime.now(timezone.utc)
         )
-    except ValueError:
-        occurred_at = datetime.now(timezone.utc)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("invalid_provider_timestamp") from exc
+    if occurred_at.tzinfo is None:
+        occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+    if occurred_at.timestamp() > time.time() + 300:
+        raise ValueError("provider_timestamp_in_future")
     row = SmsProviderEventInbox(
         source="jasmin",
         source_key_id=source_key_id,
@@ -122,6 +194,7 @@ def _dlr(db, row, data):
             Message.provider_message_id == row.provider_message_id,
             Provider.dlr_source_key_id == row.source_key_id,
         )
+        .with_for_update(of=Message)
     ).all()
     if len(matches) != 1:
         db.add(
@@ -170,14 +243,30 @@ def _dlr(db, row, data):
             message.correlation_id,
             {"message_id": message.id, "status": status},
         )
-        _queue_webhooks(db, message.tenant_id, row.id, f"sms.{status}")
+        stored_event = db.scalar(
+            select(Outbox).where(
+                Outbox.tenant_id == message.tenant_id,
+                Outbox.idempotency_key == f"sms:{status}:{provider_event_identity}",
+            )
+        )
+        if stored_event:
+            _queue_webhooks(db, message.tenant_id, stored_event.id, f"sms.{status}")
     row.state = "processed"
 
 
 def _mo(db, row, data):
+    lock_message_key(db, "inbound:" + row.source_key_id, row.provider_message_id or row.event_id)
     destination = data.get("to") or data.get("destination")
     number = db.scalar(
-        select(PhoneNumber).where(PhoneNumber.number == destination, PhoneNumber.status == "active")
+        select(PhoneNumber)
+        .join(SmsInboundBinding, SmsInboundBinding.number_id == PhoneNumber.id)
+        .where(
+            SmsInboundBinding.source_key_id == row.source_key_id,
+            SmsInboundBinding.destination == destination,
+            SmsInboundBinding.enabled == True,
+            PhoneNumber.number == destination,
+            PhoneNumber.status == "active",
+        )
     )
     if not number:
         db.add(
@@ -189,19 +278,22 @@ def _mo(db, row, data):
         )
         row.state = "quarantined"
         return
+    # Synchronize STOP/consent changes with admission on the same tenant.
+    db.scalar(select(Tenant).where(Tenant.id == number.tenant_id).with_for_update())
     row.tenant_id = number.tenant_id
     sender = data.get("from") or data.get("sender")
     content = data.get("content", "")
+    provider_identity = "jasmin:" + hashlib.sha256(row.source_key_id.encode()).hexdigest()[:32]
     inbound = db.scalar(
         select(InboundMessage).where(
-            InboundMessage.provider == "jasmin",
+            InboundMessage.provider == provider_identity,
             InboundMessage.provider_message_id == row.provider_message_id,
         )
     )
     if not inbound:
         inbound = InboundMessage(
             tenant_id=number.tenant_id,
-            provider="jasmin",
+            provider=provider_identity,
             provider_message_id=row.provider_message_id or row.event_id,
             sender=sender,
             destination=destination,
@@ -209,6 +301,19 @@ def _mo(db, row, data):
             conversation_key=f"{number.tenant_id}:{sender}:{destination}",
         )
         db.add(inbound)
+        db.flush()
+    elif (
+        inbound.tenant_id != number.tenant_id
+        or inbound.sender != sender
+        or inbound.destination != destination
+        or inbound.content != content
+    ):
+        row.state = "quarantined"
+        return
+    else:
+        # Same provider message with a new transport event ID is still a replay.
+        row.state = "processed"
+        return
     keyword = content.strip().upper()
     event_type = "sms.inbound.received"
     contact = db.scalar(
@@ -309,14 +414,22 @@ def _mo(db, row, data):
         number.tenant_id,
         event_type,
         f"sms:mo:{_provider_event_identity(row)}",
-        row.event_id,
+        str(uuid.UUID(hex=_provider_event_identity(row)[:32])),
         {"inbound_message_id": inbound.id},
     )
-    _queue_webhooks(db, number.tenant_id, row.id, event_type)
+    stored_event = db.scalar(
+        select(Outbox).where(
+            Outbox.tenant_id == number.tenant_id,
+            Outbox.idempotency_key == f"sms:mo:{_provider_event_identity(row)}",
+        )
+    )
+    _queue_webhooks(db, number.tenant_id, stored_event.id, event_type)
     row.state = "processed"
 
 
 def process_event(db, row):
+    if row.state == "processed":
+        return
     row.attempts += 1
     attempt = SmsProviderEventAttempt(
         inbox_id=row.id, tenant_id=row.tenant_id, attempt_number=row.attempts, outcome="processing"
