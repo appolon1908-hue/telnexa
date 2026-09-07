@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     Boolean,
     JSON,
+    Text,
     UniqueConstraint,
     CheckConstraint,
 )
@@ -137,6 +138,7 @@ class Message(Base):
     destination: Mapped[str] = mapped_column(String(32))
     sender: Mapped[str] = mapped_column(String(20))
     content_hash: Mapped[str] = mapped_column(String(64))
+    content: Mapped[str | None] = mapped_column(String(5000))
     encoding: Mapped[str] = mapped_column(String(10))
     character_count: Mapped[int] = mapped_column(Integer)
     segments: Mapped[int] = mapped_column(Integer)
@@ -150,6 +152,13 @@ class Message(Base):
     actual_provider_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     actual_sell_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     reservation_id: Mapped[str | None] = mapped_column(String(36))
+    route_decision_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    dispatch_job_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_code: Mapped[str | None] = mapped_column(String(80))
+    submission_certainty: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
@@ -226,6 +235,20 @@ class ApiKey(Base):
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ServiceAccount(Base):
+    __tablename__ = "service_accounts"
+    __table_args__ = (UniqueConstraint("tenant_id", "client_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    client_id: Mapped[str] = mapped_column(String(120), unique=True)
+    secret_hash: Mapped[str] = mapped_column(String(255))
+    scopes: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Audit(Base):
@@ -373,6 +396,21 @@ class Provider(Base):
     tps: Mapped[int] = mapped_column(Integer, default=1)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     capabilities: Mapped[dict] = mapped_column(JSON, default=dict)
+    adapter_type: Mapped[str] = mapped_column(String(40), default="simulator")
+    credential_reference: Mapped[str | None] = mapped_column(String(255))
+    dlr_source_key_id: Mapped[str | None] = mapped_column(String(120), unique=True)
+    environment: Mapped[str] = mapped_column(String(30), default="simulator")
+    base_url: Mapped[str | None] = mapped_column(String(500))
+    routing_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    max_inflight: Mapped[int] = mapped_column(Integer, default=1)
+    connect_timeout_ms: Mapped[int] = mapped_column(Integer, default=1000)
+    request_timeout_ms: Mapped[int] = mapped_column(Integer, default=5000)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_streak: Mapped[int] = mapped_column(Integer, default=0)
+    inflight_count: Mapped[int] = mapped_column(Integer, default=0)
+    tps_window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tps_window_count: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -424,6 +462,12 @@ class InboundMessage(Base):
 
 class SmppCredential(Base):
     __tablename__ = "smpp_credentials"
+    __table_args__ = (
+        CheckConstraint(
+            "enabled = false",
+            name="ck_smpp_credentials_runtime_provisioned_before_enable",
+        ),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
     system_id: Mapped[str] = mapped_column(String(32), unique=True)
@@ -433,6 +477,39 @@ class SmppCredential(Base):
     tps: Mapped[int] = mapped_column(Integer, default=1)
     ip_allowlist: Mapped[list] = mapped_column(JSON, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CommandIdempotency(Base):
+    __tablename__ = "command_idempotency"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "caller_identity",
+            "resource",
+            "action",
+            "api_version",
+            "idempotency_key",
+            name="uq_command_idempotency_identity",
+        ),
+        CheckConstraint(
+            "(response_json IS NOT NULL AND response_ciphertext IS NULL) "
+            "OR (response_json IS NULL AND response_ciphertext IS NOT NULL)",
+            name="ck_command_idempotency_response",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    caller_identity: Mapped[str] = mapped_column(String(180))
+    resource: Mapped[str] = mapped_column(String(160))
+    action: Mapped[str] = mapped_column(String(80))
+    api_version: Mapped[str] = mapped_column(String(20))
+    idempotency_key: Mapped[str] = mapped_column(String(180))
+    semantic_sha256: Mapped[str] = mapped_column(String(64))
+    status_code: Mapped[int] = mapped_column(Integer)
+    resource_id: Mapped[str | None] = mapped_column(String(36))
+    response_json: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    response_ciphertext: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -520,3 +597,136 @@ class ConsentRecord(Base):
     privacy_version: Mapped[str | None] = mapped_column(String(80))
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SmsDispatchJob(Base):
+    __tablename__ = "sms_dispatch_jobs"
+    __table_args__ = (CheckConstraint("attempt_count >= 0"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    message_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    state: Mapped[str] = mapped_column(String(30), default="queued", index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    lease_owner: Mapped[str | None] = mapped_column(String(120))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    selected_provider_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    route_decision_id: Mapped[str | None] = mapped_column(String(36))
+    canary_gate_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    last_error_class: Mapped[str | None] = mapped_column(String(80))
+    last_error_code: Mapped[str | None] = mapped_column(String(120))
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class SmsDispatchAttempt(Base):
+    __tablename__ = "sms_dispatch_attempts"
+    __table_args__ = (UniqueConstraint("job_id", "attempt_number"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    job_id: Mapped[str] = mapped_column(String(36), index=True)
+    message_id: Mapped[str] = mapped_column(String(36), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    provider_id: Mapped[str] = mapped_column(String(36), index=True)
+    adapter_type: Mapped[str] = mapped_column(String(40))
+    route_version: Mapped[int] = mapped_column(Integer)
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str | None] = mapped_column(String(30))
+    provider_message_id: Mapped[str | None] = mapped_column(String(120))
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    provider_code: Mapped[str | None] = mapped_column(String(120))
+    error_class: Mapped[str | None] = mapped_column(String(80))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    secret_free_evidence_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SmsRouteDecision(Base):
+    __tablename__ = "sms_route_decisions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    message_id: Mapped[str] = mapped_column(String(36), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    destination_prefix: Mapped[str] = mapped_column(String(32))
+    country: Mapped[str] = mapped_column(String(2))
+    network: Mapped[str | None] = mapped_column(String(20))
+    sender_id: Mapped[str | None] = mapped_column(String(36))
+    country_policy_id: Mapped[str | None] = mapped_column(String(36))
+    selected_provider_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    selected_route_id: Mapped[str | None] = mapped_column(String(36))
+    route_version: Mapped[int | None] = mapped_column(Integer)
+    candidate_summary: Mapped[list] = mapped_column(JSON, default=list)
+    provider_rate_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    sell_rate_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    decision_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class SmsProviderEventInbox(Base):
+    __tablename__ = "sms_provider_event_inbox"
+    __table_args__ = (UniqueConstraint("source_key_id", "event_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    source: Mapped[str] = mapped_column(String(40))
+    source_key_id: Mapped[str] = mapped_column(String(120))
+    event_id: Mapped[str] = mapped_column(String(120))
+    event_type: Mapped[str] = mapped_column(String(20))
+    provider_message_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    message_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    normalized_payload: Mapped[dict] = mapped_column(JSON)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    state: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
+class SmsProviderEventAttempt(Base):
+    __tablename__ = "sms_provider_event_attempts"
+    __table_args__ = (UniqueConstraint("inbox_id", "attempt_number"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    inbox_id: Mapped[str] = mapped_column(String(36), index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    outcome: Mapped[str] = mapped_column(String(30))
+    error: Mapped[str | None] = mapped_column(String(500))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SmsReconciliationCase(Base):
+    __tablename__ = "sms_reconciliation_cases"
+    __table_args__ = (UniqueConstraint("case_type", "reference_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    message_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    case_type: Mapped[str] = mapped_column(String(50))
+    reference_id: Mapped[str] = mapped_column(String(120))
+    state: Mapped[str] = mapped_column(String(30), default="open", index=True)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    resolution: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class SmsProductionCanaryGate(Base):
+    __tablename__ = "sms_production_canary_gates"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    gate_key: Mapped[str] = mapped_column(String(120), unique=True)
+    stage: Mapped[str] = mapped_column(String(40), default="SIMULATOR_ONLY")
+    allowed_tenant: Mapped[str] = mapped_column(String(36), index=True)
+    allowed_sender: Mapped[str] = mapped_column(String(20))
+    allowed_destinations: Mapped[list] = mapped_column(JSON)
+    max_submissions: Mapped[int] = mapped_column(Integer)
+    reserved_count: Mapped[int] = mapped_column(Integer, default=0)
+    claimed_count: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    approval_reference: Mapped[str] = mapped_column(String(255))
+    approved_by: Mapped[str] = mapped_column(String(120))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

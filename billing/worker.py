@@ -1,9 +1,12 @@
 import hashlib
 import hmac
 import json
+import ssl
 import time
 import urllib.request
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from urllib.parse import urlsplit
 from sqlalchemy import select
 from .config import settings
 from .db import SessionLocal
@@ -16,6 +19,38 @@ from .models import (
     InboundMessage,
 )
 from .webhooks import decrypt_secret, validate_webhook_url
+
+MIDDLEWARE_HOST = "middleware.internal.codestra.agency"
+MIDDLEWARE_PATH = "/api/v1/events/telnexa"
+
+
+def middleware_ssl_context() -> ssl.SSLContext:
+    parsed = urlsplit(settings.middleware_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != MIDDLEWARE_HOST
+        or parsed.port not in (None, 443)
+        or parsed.path != MIDDLEWARE_PATH
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("canonical_middleware_endpoint_required")
+    required = (
+        settings.middleware_ca_file,
+        settings.middleware_client_cert_file,
+        settings.middleware_client_key_file,
+    )
+    if any(not Path(value).is_file() for value in required):
+        raise RuntimeError("middleware_mtls_identity_unavailable")
+    context = ssl.create_default_context(cafile=settings.middleware_ca_file)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(
+        certfile=settings.middleware_client_cert_file,
+        keyfile=settings.middleware_client_key_file,
+    )
+    return context
 
 
 def deliver_webhooks(db, sender=None):
@@ -155,7 +190,10 @@ def once(sender=None):
             try:
                 if not settings.middleware_api_key or not settings.middleware_hmac_secret:
                     raise RuntimeError("middleware_credentials_unavailable")
-                (sender or urllib.request.urlopen)(req, timeout=10)
+                if sender is not None:
+                    sender(req, timeout=10)
+                else:
+                    urllib.request.urlopen(req, timeout=10, context=middleware_ssl_context())
                 row.state = "delivered"
                 sent += 1
             except Exception as e:

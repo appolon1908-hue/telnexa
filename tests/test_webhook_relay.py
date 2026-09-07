@@ -56,7 +56,7 @@ class SignatureTest(unittest.TestCase):
                 "source_token": token,
                 "id": "message-1",
             }
-            self.assertTrue(relay.authenticated_source({}, values))
+            self.assertEqual(relay.authenticated_source({}, values), "jasmin")
             self.assertEqual(values, {"id": "message-1"})
             self.assertFalse(
                 relay.authenticated_source({}, {"source_key_id": "jasmin", "source_token": "wrong"})

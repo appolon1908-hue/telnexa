@@ -8,11 +8,10 @@ class SendRequest(BaseModel):
     sender: str = Field(min_length=1, max_length=20)
     content: str = Field(min_length=1, max_length=5000)
     category: str = Field(default="transactional", pattern="^(transactional|service|marketing)$")
+    campaign_id: str | None = None
     client_reference: str | None = Field(default=None, max_length=120)
-    simulator_outcome: str = Field(
-        default="delivered",
-        pattern="^(submitted|sent|delivered|failed|expired|undeliverable|reject|submission_failed)$",
-    )
+
+    model_config = {"extra": "forbid"}
 
 
 class CreditRequest(BaseModel):

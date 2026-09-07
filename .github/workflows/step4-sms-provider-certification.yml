@@ -1,0 +1,249 @@
+name: Step 4 SMS provider certification
+
+on:
+  pull_request:
+    paths:
+      - "billing/sms_provider_*.py"
+      - "billing/migrations/004_sms_provider_runtime.sql"
+      - "config/step4-sms-contract-lock.json"
+      - "labs/middleware_telnexa/**"
+      - "scripts/validate_step4_sms_contract_lock.py"
+      - "tests/test_sms_provider_*.py"
+      - ".github/workflows/step4-sms-provider-certification.yml"
+      - "docs/STEP4_SMS_PROVIDER_*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: step4-sms-provider-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  MIDDLEWARE_SMS_SHA: d7fcb30dc70ed54bd7e444e4c2ab59f5b5b5d24e
+  SDK_COMMUNICATIONS_SHA: 63c793e88cca5daecfb5c8a688b8674ab288c522
+
+jobs:
+  exact-source-head:
+    name: Step 4 exact source-head validation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact source identity
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Check out exact Middleware SMS authority
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: appolon1908-hue/Middleware-
+          ref: ${{ env.MIDDLEWARE_SMS_SHA }}
+          path: _external/middleware
+          persist-credentials: false
+
+      - name: Check out exact SDK communications authority
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: appolon1908-hue/SDK-repository
+          ref: ${{ env.SDK_COMMUNICATIONS_SHA }}
+          path: _external/sdk
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: billing/requirements.txt
+
+      - name: Install exact test and quality dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r billing/requirements.txt ruff pip-audit
+
+      - name: Validate SDK Middleware and Telnexa contract lock
+        run: |
+          python scripts/validate_step4_sms_contract_lock.py \
+            --telnexa-dir . \
+            --middleware-dir _external/middleware \
+            --sdk-dir _external/sdk
+
+      - name: Format lint compile and targeted tests
+        run: |
+          python -m ruff format --check \
+            billing/sms_provider_*.py \
+            labs/middleware_telnexa \
+            scripts/validate_step4_sms_contract_lock.py \
+            tests/test_sms_provider_runtime.py \
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
+          python -m ruff check \
+            billing/sms_provider_*.py \
+            labs/middleware_telnexa \
+            scripts/validate_step4_sms_contract_lock.py \
+            tests/test_sms_provider_runtime.py \
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
+          python -m compileall -q billing labs scripts tests
+          python -m pytest -q \
+            tests/test_sms_provider_runtime.py \
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py \
+            tests/test_billing_engine.py \
+            tests/test_product_api.py \
+            tests/test_webhook_relay.py \
+            tests/test_production_readiness.py
+
+      - name: Dependency audit
+        run: python -m pip_audit -r billing/requirements.txt --progress-spinner off
+
+      - name: Verify live-effect flags remain disabled
+        run: |
+          ! grep -R --line-number --extended-regexp \
+            '^(SMS_DELIVERY|LIVE_SMS_DELIVERY|JASMIN_LIVE_SUBMISSION):[[:space:]]*"?true"?$' \
+            config labs billing docs
+          ! grep -R --line-number 'ports:' labs/middleware_telnexa/compose.yml
+
+  exact-merge-result:
+    name: Step 4 exact merge-result validation
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact synthetic merge result
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact merge-result identity
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - name: Check out exact Middleware SMS authority
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: appolon1908-hue/Middleware-
+          ref: ${{ env.MIDDLEWARE_SMS_SHA }}
+          path: _external/middleware
+          persist-credentials: false
+
+      - name: Check out exact SDK communications authority
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: appolon1908-hue/SDK-repository
+          ref: ${{ env.SDK_COMMUNICATIONS_SHA }}
+          path: _external/sdk
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: billing/requirements.txt
+
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r billing/requirements.txt ruff
+
+      - name: Run fail-closed merge-result validation
+        run: |
+          python scripts/validate_step4_sms_contract_lock.py \
+            --telnexa-dir . \
+            --middleware-dir _external/middleware \
+            --sdk-dir _external/sdk
+          python -m ruff format --check \
+            billing/sms_provider_*.py \
+            labs/middleware_telnexa \
+            scripts/validate_step4_sms_contract_lock.py \
+            tests/test_sms_provider_runtime.py \
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
+          python -m ruff check \
+            billing/sms_provider_*.py \
+            labs/middleware_telnexa \
+            scripts/validate_step4_sms_contract_lock.py \
+            tests/test_sms_provider_runtime.py \
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
+          python -m pytest -q \
+            tests/test_sms_provider_runtime.py \
+            tests/test_sms_provider_service.py \
+            tests/test_sms_provider_reconciliation_safety.py
+
+  isolated-postgres-jasmin-lab:
+    name: Isolated PostgreSQL and no-effect Jasmin certification
+    needs: exact-source-head
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Render isolated Compose contract
+        run: docker compose -f labs/middleware_telnexa/compose.yml config --quiet
+
+      - name: Start isolated private services
+        run: |
+          docker compose -f labs/middleware_telnexa/compose.yml \
+            up --detach --build postgres jasmin-simulator provider
+
+      - name: Run zero-effect cross-repository certification
+        run: docker compose -f labs/middleware_telnexa/compose.yml run --rm certify
+
+      - name: Verify PostgreSQL durability and one-submit constraint
+        run: |
+          docker compose -f labs/middleware_telnexa/compose.yml exec -T postgres \
+            psql -v ON_ERROR_STOP=1 -U stage4 -d telnexa_stage4 <<'SQL'
+          DO $$
+          DECLARE
+            operation_count integer;
+            maximum_submission_attempts integer;
+            tenant_policy_count integer;
+          BEGIN
+            SELECT count(*), COALESCE(max(submission_attempts), -1)
+              INTO operation_count, maximum_submission_attempts
+              FROM sms_provider_operations;
+            IF operation_count <> 1 OR maximum_submission_attempts <> 1 THEN
+              RAISE EXCEPTION
+                'unexpected SMS operation evidence: count=%, max_submission_attempts=%',
+                operation_count,
+                maximum_submission_attempts;
+            END IF;
+
+            SELECT count(*)
+              INTO tenant_policy_count
+              FROM pg_policies
+             WHERE tablename LIKE 'sms_provider_%';
+            IF tenant_policy_count <> 7 THEN
+              RAISE EXCEPTION
+                'unexpected SMS tenant policy count: %',
+                tenant_policy_count;
+            END IF;
+          END
+          $$;
+          SQL
+          echo "TELNEXA_POSTGRES_DURABILITY=PASS"
+          if docker compose -f labs/middleware_telnexa/compose.yml exec -T postgres \
+            psql -v ON_ERROR_STOP=1 -U stage4 -d telnexa_stage4 -c \
+            "UPDATE sms_provider_operations SET submission_attempts = 2"; then
+            echo "one-submission database guard did not fail closed" >&2
+            exit 1
+          fi
+
+      - name: Capture lab logs
+        if: always()
+        run: docker compose -f labs/middleware_telnexa/compose.yml logs --no-color
+
+      - name: Destroy disposable lab
+        if: always()
+        run: docker compose -f labs/middleware_telnexa/compose.yml down --volumes --remove-orphans
