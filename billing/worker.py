@@ -80,7 +80,13 @@ def deliver_webhooks(db, sender=None):
             )
         )
         inbound = None
-        if event:
+        outbox_event = db.scalar(
+            select(Outbox).where(Outbox.id == row.event_id, Outbox.tenant_id == row.tenant_id)
+        )
+        if outbox_event:
+            event_type = outbox_event.event_type
+            payload = outbox_event.envelope.get("payload", {})
+        elif event:
             msg = db.scalar(
                 select(Message).where(
                     Message.id == event.message_id, Message.tenant_id == row.tenant_id
@@ -112,7 +118,7 @@ def deliver_webhooks(db, sender=None):
                 else {}
             )
         try:
-            if not hook or (not event and not inbound):
+            if not hook or (not event and not inbound and not outbox_event):
                 raise RuntimeError("webhook_or_event_unavailable")
             validate_webhook_url(hook.url)
             body = json.dumps(

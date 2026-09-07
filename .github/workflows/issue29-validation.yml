@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'billing/**'
+      - 'docker/webhook-relay/**'
       - 'tests/**'
       - 'scripts/**'
       - '.github/workflows/issue29-validation.yml'
@@ -16,31 +17,63 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  source-reproduction:
+  private-sms-contract:
+    name: Private SMS contract (${{ matrix.revision }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [source, merge-result]
+    services:
+      postgres:
+        image: postgres@sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168
+        env:
+          POSTGRES_USER: telnexa_ci
+          POSTGRES_PASSWORD: ci-placeholder-only
+          POSTGRES_DB: telnexa_issue29_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U telnexa_ci -d telnexa_issue29_ci'
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      SOURCE_SHA: ${{ matrix.revision == 'source' && github.event.pull_request.head.sha || github.sha }}
+      LIVE_SMS_DELIVERY: 'false'
+      LIVE_EMAIL_DELIVERY: 'false'
+      LIVE_PSTN_DIALING: 'false'
+      TELNEXA_PRODUCTION_SMS_ENABLED: 'false'
+      SMS_DELIVERY: 'false'
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
-      - name: Archive only tracked source, never runner secrets or runtime evidence
-        env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -Eeuo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          mkdir -p /tmp/issue29-source
-          git archive --format=tar.gz HEAD > /tmp/issue29-source/source.tar.gz
-          printf '%s\n' "$EXPECTED_SHA" > /tmp/issue29-source/SOURCE_SHA
-          cd /tmp/issue29-source
-          sha256sum source.tar.gz SOURCE_SHA > SHA256SUMS
-      - name: Download pinned public formatter for offline reproduction
-        run: |
-          python -m pip download --only-binary=:all: --no-deps ruff==0.16.6 -d /tmp/issue29-source
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - name: Verify exact tested source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          name: issue29-source-${{ github.event.pull_request.head.sha }}
-          path: /tmp/issue29-source/
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: billing/requirements.txt
+      - name: Install pinned application and formatter dependencies
+        run: python -m pip install -r billing/requirements.txt ruff==0.16.6
+      - name: Test API callbacks replay and crash recovery without external delivery
+        run: |
+          python -m ruff format --check billing tests
+          python -m ruff check billing tests docker scripts
+          python -m pytest -q tests/test_private_sms_contract.py tests/test_production_sms_adapter.py tests/test_message_idempotency_race.py tests/test_sender_approval_reconciliation.py tests/test_webhook_relay.py
+      - name: Prove PostgreSQL migrations, concurrency, quota and receipt immutability
+        env:
+          BILLING_DATABASE_URL: postgresql+psycopg://telnexa_ci:ci-placeholder-only@127.0.0.1:5432/telnexa_issue29_ci
+          TELNEXA_DISPOSABLE_CERTIFICATION: 'true'
+        run: |
+          python -m billing.migrate
+          python -m billing.migrate
+          python -m scripts.certify_private_sms_contract
+      - name: Upload sanitized source-only evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue29-evidence-${{ matrix.revision }}-${{ github.event.pull_request.head.sha }}
+          path: issue29-evidence.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30

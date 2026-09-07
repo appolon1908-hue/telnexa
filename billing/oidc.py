@@ -16,6 +16,7 @@ ROLE_SCOPES = {
 }
 ALIASES = {
     "read": "sms.read",
+    "sms.status.read": "sms.read",
     "messages:write": "sms.send",
     "bulk:write": "sms.bulk",
     "webhooks:write": "sms.webhook",
