@@ -15,23 +15,28 @@ from pathlib import Path
 try:
     SECRET = Path(os.environ["TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE"]).read_bytes().strip()
 except (KeyError, OSError):
-    SECRET = os.environ.get("WEBHOOK_HMAC_SECRET", "").encode()
+    SECRET = (
+        b""
+        if os.environ.get("TELNEXA_PROVIDER_EVENT_HMAC_SECRET_FILE")
+        else os.environ.get("WEBHOOK_HMAC_SECRET", "").encode()
+    )
 TARGET = os.environ.get("TELNEXA_PROVIDER_EVENT_URL", "").rstrip("/")
 TIMEOUT = float(os.environ.get("WEBHOOK_TIMEOUT_SECONDS", "10"))
 ALLOWED = {"inbound", "dlr", "failed"}
 
 
-def make_signature(secret, method, path, timestamp, event_id, payload):
+def make_signature(secret, method, path, timestamp, event_id, payload, source_key_id=None):
     normalized_path = "/" + "/".join(part for part in path.split("/") if part)
     body_hash = hashlib.sha256(payload).hexdigest()
     canonical = "\n".join(
         (
-            "v1",
+            "v2" if source_key_id is not None else "v1",
             method.upper(),
             normalized_path,
             timestamp,
             event_id,
             "telnexa",
+            *([source_key_id] if source_key_id is not None else []),
             body_hash,
         )
     ).encode()
@@ -40,12 +45,23 @@ def make_signature(secret, method, path, timestamp, event_id, payload):
 
 def authenticated_source(headers, values):
     path = os.environ.get("TELNEXA_PROVIDER_KEYS_FILE", "")
-    try:
-        records = json.loads(open(path, encoding="utf-8").read()).get("keys", [])
-    except (OSError, ValueError):
+    if not isinstance(values, dict):
         return False
-    key_id = headers.get("X-Key-ID", "") or values.pop("source_key_id", "")
-    token = headers.get("X-Telnexa-Source-Token", "") or values.pop("source_token", "")
+    # Strip query/body credentials even if the header takes precedence.
+    body_key = values.pop("source_key_id", "")
+    body_token = values.pop("source_token", "")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            document = json.loads(handle.read(1048577))
+        records = document.get("keys", [])
+        if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
+            return False
+    except (OSError, ValueError, AttributeError, RecursionError):
+        return False
+    key_id = headers.get("X-Key-ID", "") or body_key
+    token = headers.get("X-Telnexa-Source-Token", "") or body_token
+    if not isinstance(key_id, str) or not isinstance(token, str) or len(token) > 8192:
+        return False
     digest = hashlib.sha256(token.encode()).hexdigest()
     matches = [
         row
@@ -53,9 +69,15 @@ def authenticated_source(headers, values):
         if row.get("id") == key_id
         and row.get("enabled") is True
         and isinstance(row.get("sha256"), str)
+        and row["sha256"].isascii()
         and hmac.compare_digest(row["sha256"], digest)
     ]
     return key_id if token and len(matches) == 1 else None
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "redirect denied", headers, fp)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -84,7 +106,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path)
-        length = min(int(self.headers.get("Content-Length", "0")), 1048576)
+        lengths = self.headers.get_all("Content-Length", [])
+        if self.headers.get("Transfer-Encoding") or len(lengths) != 1 or not lengths[0].isdigit():
+            return self.send(400, {"error": "invalid content length"})
+        if len(lengths[0]) > 12 or int(lengths[0]) > 1048576:
+            return self.send(413, {"error": "payload too large"})
+        length = int(lengths[0])
         raw = self.rfile.read(length)
         content_type = self.headers.get("Content-Type", "")
         try:
@@ -93,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
                 if "application/json" in content_type
                 else dict(urllib.parse.parse_qsl(raw.decode(), keep_blank_values=True))
             )
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             return self.send(400, {"error": "invalid payload"})
         return self.forward(path, values)
 
@@ -101,6 +128,8 @@ class Handler(BaseHTTPRequestHandler):
         parts = path.path.strip("/").split("/")
         if len(parts) != 2 or parts[0] != "events" or parts[1] not in ALLOWED:
             return self.send(404, {"error": "not found"})
+        if not isinstance(values, dict):
+            return self.send(400, {"error": "object payload required"})
         source_key_id = authenticated_source(self.headers, values)
         if not source_key_id:
             return self.send(401, {"error": "provider source identity required"})
@@ -110,19 +139,21 @@ class Handler(BaseHTTPRequestHandler):
             separators=(",", ":"),
             sort_keys=True,
         ).encode()
-        if not TARGET:
-            return self.send(503, {"error": "middleware target is not configured"})
+        if TARGET != "http://billing-api:8000" or len(SECRET) < 32:
+            return self.send(503, {"error": "private inbox identity is not configured"})
         timestamp = str(int(time.time()))
         event_id = hashlib.sha256(payload).hexdigest()
         target_path = "/internal/v1/provider-events/jasmin"
-        signature = make_signature(SECRET, "POST", target_path, timestamp, event_id, payload)
+        signature = make_signature(
+            SECRET, "POST", target_path, timestamp, event_id, payload, source_key_id
+        )
         request = urllib.request.Request(
             f"{TARGET}{target_path}",
             data=payload,
             method="POST",
             headers={
                 "Content-Type": "application/json",
-                "X-Signature-Version": "v1",
+                "X-Signature-Version": "v2",
                 "X-Telnexa-Timestamp": timestamp,
                 "X-Telnexa-Event-Id": event_id,
                 "X-Telnexa-Signature": f"sha256={signature}",
@@ -131,7 +162,9 @@ class Handler(BaseHTTPRequestHandler):
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            with urllib.request.build_opener(NoRedirect()).open(
+                request, timeout=TIMEOUT
+            ) as response:
                 return self.send(
                     202 if response.status < 300 else 502,
                     {"accepted": response.status < 300},

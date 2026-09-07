@@ -22,6 +22,7 @@ from .models import (
 )
 from .routing import authorize_route, persist_decision
 from .state_machine import transition
+from .sms_integration import SmsAcceptanceReceipt, enforce_message_policy
 
 
 def accept_message(
@@ -77,7 +78,12 @@ def accept_message(
     message.provider_rate_snapshot = decision.provider_rate_snapshot
     message.sell_rate_snapshot = decision.sell_rate_snapshot
     reservation = reserve(
-        db, account.id, message.estimated_sell_amount, f"send:{key}", message.id, correlation
+        db,
+        account.id,
+        message.estimated_sell_amount,
+        "send:" + hashlib.sha256(key.encode()).hexdigest(),
+        message.id,
+        correlation,
     )
     message.reservation_id = reservation.id
     transition(
@@ -180,6 +186,8 @@ def process_job(db, job, adapter_factory):
         return
     now = datetime.now(timezone.utc)
     gate = None
+    # Same tenant -> canary lock order as the acceptance path.
+    db.scalar(select(Tenant).where(Tenant.id == message.tenant_id).with_for_update())
     if production_enabled():
         gate = validate_reserved_canary(
             db,
@@ -201,6 +209,26 @@ def process_job(db, job, adapter_factory):
             job.state = "rejected"
             job.last_error_code = "canary_gate_denied"
             return
+    from fastapi import HTTPException
+
+    receipt = db.get(SmsAcceptanceReceipt, message.id)
+    try:
+        if production_enabled() and receipt is None:
+            raise HTTPException(403, "submission_receipt_required")
+        enforce_message_policy(
+            db,
+            message.tenant_id,
+            message.destination,
+            receipt.category if receipt else "transactional",
+            receipt.campaign_id if receipt else None,
+        )
+    except HTTPException as exc:
+        release(db, message.reservation_id, message.correlation_id, exc.detail)
+        transition(
+            db, message, "rejected", f"policy-denied:{job.id}", evidence={"reason": exc.detail}
+        )
+        job.state, job.last_error_code = "rejected", exc.detail
+        return
     if not acquire_provider_capacity(db, provider.id, now):
         transition(db, message, "retry_wait", f"throttle:{job.id}:{job.attempt_count + 1}")
         job.state = "retry_wait"

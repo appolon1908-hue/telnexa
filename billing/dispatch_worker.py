@@ -51,7 +51,32 @@ def run_once(owner=None):
         job = claim_job(db, owner or f"{socket.gethostname()}:{os.getpid()}")
         if not job:
             return False
-        process_job(db, job, adapter_for)
+        job_id = job.id
+        claimed_owner = job.lease_owner
+    # The context above committed 'dispatching'. A crash from here onward leaves
+    # a durable claim that no queued-job worker may submit again.
+    try:
+        with SessionLocal.begin() as db:
+            from sqlalchemy import select
+            from .models import SmsDispatchJob
+
+            job = db.scalar(
+                select(SmsDispatchJob)
+                .where(
+                    SmsDispatchJob.id == job_id,
+                    SmsDispatchJob.state == "dispatching",
+                    SmsDispatchJob.lease_owner == claimed_owner,
+                )
+                .with_for_update()
+            )
+            if job:
+                process_job(db, job, adapter_for)
+    except Exception:
+        with SessionLocal.begin() as db:
+            from .reconciliation import quarantine_interrupted_dispatch
+
+            quarantine_interrupted_dispatch(db, job_id, force=True)
+        raise
     return True
 
 
