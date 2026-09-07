@@ -47,7 +47,13 @@ Application / SDK
 
 Inbound and delivery events first pass through the authenticated callback relay into Telnexa's private `/internal/v1/provider-events/jasmin` durable inbox. Telnexa processes local message state, billing and STOP/HELP before transactional outbox delivery to Middleware. A direct Jasmin-to-Middleware relay cannot replace this local authority. Provider callbacks cannot select a tenant.
 
-The local Telnexa portal retains its own accepted Keycloak issuer and `telnexa-api` audience. The separate Codestra machine trust uses `telnexa-gateway`, an explicit caller allowlist, tenant/account binding, and distinct `sms.send` / `sms.status.read` scopes. Source registration does not enable this trust or change either live realm.
+## Current identity versus proposed machine integration
+
+**Currently implemented in this PR's main baseline:** the local Telnexa portal uses `https://api.telnexa.co/auth/realms/telnexa`, audience `telnexa-api`, the configured local client allowlist, and existing `sms.read`/portal read requirements. Preserve that accepted trust and the scopes in the current runtime contracts.
+
+**Proposed, not enabled or implemented by this documentation PR:** PR #15 adds a separate disabled-by-default Codestra machine verifier for audience `telnexa-gateway`, explicit caller allowlist, tenant/account binding and distinct `sms.send` / `sms.status.read` scopes. This PR does not install that verifier. It must not be treated as evidence that Codestra status tokens can authorize the current generic-read routes.
+
+Machine `sms.status.read` must never satisfy generic `read` or `sms.read` requirements: those also protect wallets, ledgers, invoices, contacts and other sensitive resources. PR #15 therefore denies generic machine reads. Dedicated message-status/event route scopes and cross-repository contract convergence remain required before machine read-back activation. Until that work is separately reviewed and tested, use only the existing approved local trust; do not deploy the proposed machine status configuration. Source registration changes neither live realm nor grants access.
 
 ## SMS command surface
 
