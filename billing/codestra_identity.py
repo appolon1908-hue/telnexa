@@ -22,8 +22,6 @@ _REFRESH_INTERVAL = 30
 _cache = {"at": 0.0, "keys": {}}
 _lock = threading.Lock()
 _SCOPE_ALIASES = {
-    "read": "sms.status.read",
-    "sms.read": "sms.status.read",
     "messages:write": "sms.send",
 }
 
@@ -47,7 +45,7 @@ def token_issuer(token: str) -> str:
         if not isinstance(issuer, str) or not issuer:
             raise ValueError("issuer required")
         return issuer
-    except (ValueError, TypeError, AttributeError, UnicodeError) as exc:
+    except (ValueError, TypeError, AttributeError, UnicodeError, RecursionError) as exc:
         raise HTTPException(401, "invalid_access_token") from exc
 
 
@@ -79,7 +77,7 @@ def _load_keys() -> dict:
         if not keys:
             raise ValueError("no supported signing keys")
         return keys
-    except (OSError, ValueError, TypeError, AttributeError) as exc:
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError) as exc:
         raise HTTPException(503, "codestra_identity_keys_unavailable") from exc
 
 
@@ -144,12 +142,16 @@ def validate_codestra_token(token: str, tenant_id: str | None, required: str) ->
             raise ValueError("invalid scope claim")
     except HTTPException:
         raise
-    except (ValueError, TypeError, KeyError, jwt.PyJWTError) as exc:
+    except (ValueError, TypeError, KeyError, RecursionError, jwt.PyJWTError) as exc:
         raise HTTPException(401, "invalid_access_token") from exc
     if claims["azp"] not in allowed_clients:
         raise HTTPException(403, "client_identity_denied")
     if not tenant_id or claims["tenant_id"] != tenant_id:
         raise HTTPException(403, "tenant_or_account_binding_required")
+    # Generic portal reads cover billing, contacts and other sensitive resources.
+    # Never reinterpret that broad requirement as narrow message-status access.
+    if required in {"read", "sms.read"}:
+        raise HTTPException(403, "explicit_machine_read_scope_required")
     scopes = set(scope.split())
     needed = _SCOPE_ALIASES.get(required, required)
     if needed not in scopes:
