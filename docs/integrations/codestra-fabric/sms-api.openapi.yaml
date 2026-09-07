@@ -1,103 +1,146 @@
-openapi: 3.1.0
+openapi: 3.0.3
 info:
-  title: Telnexa SMS API for Codestra Middleware
-  version: 2.0.0
+  title: Codestra SMS Fabric — design contract
+  version: 2.0.1
+  description: Design-only extension contract. Generated runtime OpenAPI and /api/v1 source remain authoritative; these /v1/sms paths are not claimed deployed.
+x-contract-status: DESIGN_ONLY_NOT_RUNTIME
 paths:
   /v1/sms/senders:
+    parameters: [{$ref: '#/components/parameters/TenantId'}]
     get:
       operationId: listSmsSenders
-      security: [{oauth2: [sms.sender.read]}]
-      responses: {'200': {description: Tenant-scoped senders}}
+      security: [{codestraOAuth: [sms.sender.read]}]
+      x-required-scopes: [sms.sender.read]
+      responses: {'200': {description: Tenant-scoped sender design response}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
     post:
       operationId: createSmsSender
-      security: [{oauth2: [sms.sender.write]}]
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}}
+      security: [{codestraOAuth: [sms.sender.write]}]
+      x-required-scopes: [sms.sender.write]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/CorrelationId'}]
+      responses: {'202': {description: Design acceptance; implementation and capability gated}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
   /v1/sms/templates:
+    parameters: [{$ref: '#/components/parameters/TenantId'}]
     get:
       operationId: listSmsTemplates
-      security: [{oauth2: [sms.template.read]}]
-      responses: {'200': {description: Tenant-scoped templates}}
+      security: [{codestraOAuth: [sms.template.read]}]
+      x-required-scopes: [sms.template.read]
+      responses: {'200': {description: Tenant-scoped template design response}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
     post:
       operationId: createSmsTemplate
-      security: [{oauth2: [sms.template.write]}]
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}}
+      security: [{codestraOAuth: [sms.template.write]}]
+      x-required-scopes: [sms.template.write]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/CorrelationId'}]
+      responses: {'202': {description: Design acceptance; implementation and capability gated}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
   /v1/sms/messages:
+    parameters: [{$ref: '#/components/parameters/TenantId'}]
     post:
       operationId: submitSmsMessage
-      security: [{oauth2: [sms.message.send]}]
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}, '409': {description: Idempotency conflict}}
+      security: [{codestraOAuth: [sms.send]}]
+      x-required-scopes: [sms.send]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/CorrelationId'}]
+      responses: {'202': {description: Design acceptance; implementation and capability gated}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}, '409': {description: Altered idempotency replay}}
   /v1/sms/messages/{message_id}:
+    parameters:
+      - {$ref: '#/components/parameters/TenantId'}
+      - {name: message_id, in: path, required: true, schema: {type: string}}
     get:
       operationId: getSmsMessage
-      security: [{oauth2: [sms.message.read]}]
-      parameters: [{name: message_id, in: path, required: true, schema: {type: string, format: uuid}}]
-      responses: {'200': {description: Reconciled message state}}
+      security: [{codestraOAuth: [sms.status.read]}]
+      x-required-scopes: [sms.status.read]
+      responses: {'200': {description: Tenant-scoped message design response}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
   /v1/sms/conversations:
+    parameters: [{$ref: '#/components/parameters/TenantId'}]
     get:
       operationId: listSmsConversations
-      security: [{oauth2: [sms.conversation.read]}]
-      responses: {'200': {description: Tenant-scoped conversations}}
+      security: [{codestraOAuth: [sms.conversation.read]}]
+      x-required-scopes: [sms.conversation.read]
+      responses: {'200': {description: Tenant-scoped conversation design response}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
   /v1/sms/conversations/{conversation_id}/messages:
+    parameters:
+      - {$ref: '#/components/parameters/TenantId'}
+      - {name: conversation_id, in: path, required: true, schema: {type: string}}
     post:
       operationId: sendConversationMessage
-      security: [{oauth2: [sms.message.send]}]
-      parameters:
-        - {name: conversation_id, in: path, required: true, schema: {type: string, format: uuid}}
-        - {$ref: '#/components/parameters/IdempotencyKey'}
-      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}}
+      security: [{codestraOAuth: [sms.send]}]
+      x-required-scopes: [sms.send]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/CorrelationId'}]
+      responses: {'202': {description: Design acceptance; implementation and capability gated}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
   /v1/sms/suppressions:
+    parameters: [{$ref: '#/components/parameters/TenantId'}]
     get:
       operationId: listSmsSuppressions
-      security: [{oauth2: [sms.suppression.read]}]
-      responses: {'200': {description: Tenant-scoped suppressions}}
+      security: [{codestraOAuth: [sms.suppression.read]}]
+      x-required-scopes: [sms.suppression.read]
+      responses: {'200': {description: Tenant-scoped suppression design response}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
     post:
       operationId: createSmsSuppression
-      security: [{oauth2: [sms.suppression.write]}]
-      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
-      responses: {'202': {$ref: '#/components/responses/OperationAccepted'}}
+      security: [{codestraOAuth: [sms.suppression.write]}]
+      x-required-scopes: [sms.suppression.write]
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}, {$ref: '#/components/parameters/CorrelationId'}]
+      responses: {'202': {description: Design acceptance; implementation and capability gated}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
   /v1/sms/usage:
+    parameters: [{$ref: '#/components/parameters/TenantId'}]
     get:
       operationId: getSmsUsage
-      security: [{oauth2: [sms.usage.read]}]
-      responses: {'200': {description: Rated usage projection}}
-  /v1/sms/provider-health:
+      security: [{codestraOAuth: [sms.usage.read]}]
+      x-required-scopes: [sms.usage.read]
+      responses: {'200': {description: Tenant-scoped usage design response}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
+  /v1/sms/providers/health:
+    parameters: [{$ref: '#/components/parameters/TenantId'}]
     get:
       operationId: getSmsProviderHealth
-      security: [{oauth2: [sms.provider-health.read]}]
-      responses: {'200': {description: Redacted provider health}}
-  /v1/webhooks/sms/jasmin:
+      security: [{codestraOAuth: [sms.provider-health.read]}]
+      x-required-scopes: [sms.provider-health.read]
+      responses: {'200': {description: Redacted provider-health design response}, '401': {description: Invalid identity}, '403': {description: Scope or tenant denied}}
+  /internal/v1/provider-events/jasmin:
     post:
-      operationId: receiveJasminWebhook
-      security: []
-      responses: {'202': {description: Durable callback acceptance after verification}}
+      operationId: receiveJasminProviderEvent
+      security: [{providerSignature: []}]
+      x-private-ingress: true
+      parameters:
+        - {name: X-Key-ID, in: header, required: true, schema: {type: string, minLength: 1}}
+        - {name: X-Signature-Version, in: header, required: true, schema: {type: string, enum: [v1]}}
+        - {name: X-Telnexa-Timestamp, in: header, required: true, schema: {type: string, minLength: 1}}
+        - {name: X-Telnexa-Event-Id, in: header, required: true, schema: {type: string, minLength: 1}}
+      responses: {'202': {description: Durably accepted or identical authenticated replay}, '401': {description: Invalid source signature or timestamp}, '409': {description: Altered replay conflict}}
 components:
   securitySchemes:
-    oauth2:
+    codestraOAuth:
       type: oauth2
       flows:
         clientCredentials:
           tokenUrl: https://auth.codestra.co/realms/codestra/protocol/openid-connect/token
           scopes:
+            sms.send: Request policy-approved SMS
+            sms.status.read: Read reconciled message status
             sms.sender.read: Read senders
             sms.sender.write: Request sender changes
             sms.template.read: Read templates
             sms.template.write: Request template changes
-            sms.message.send: Request a policy-approved SMS
-            sms.message.read: Read message state
             sms.conversation.read: Read conversations
-            sms.suppression.read: Read suppressions
+            sms.suppression.read: Read suppression state
             sms.suppression.write: Request suppression
             sms.usage.read: Read rated usage
             sms.provider-health.read: Read redacted provider health
+    providerSignature:
+      type: apiKey
+      in: header
+      name: X-Telnexa-Signature
+      description: HMAC over the exact raw body and canonical method/path/time/event/source fields, with authenticated source key, bounded timestamp and durable deduplication. Not a static API key.
   parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}
+      description: Must equal the verified service-token tenant binding.
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: true
       schema: {type: string, minLength: 8, maxLength: 180}
-  responses:
-    OperationAccepted:
-      description: Durable asynchronous operation accepted
+    CorrelationId:
+      name: X-Correlation-ID
+      in: header
+      required: true
+      schema: {type: string, minLength: 1}

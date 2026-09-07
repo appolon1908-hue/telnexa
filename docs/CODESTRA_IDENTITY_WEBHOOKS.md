@@ -1,88 +1,64 @@
-# Codestra Keycloak and middleware webhook integration
+# Codestra machine identity and durable SMS callbacks
 
-## Identity contract
+## Source reconciliation — 2026-09-07
 
-Telnexa is a dedicated resource server and workload identity:
+PR #15 is reconciled with protected main after #14, #22, #25, #27 and #28.
+The previous branch must not replace the local portal issuer or restore a direct
+Jasmin-to-Middleware relay. The current billing API, migrations, immutable release
+workflow, portal, provider-event relay and workers remain authoritative.
 
-```text
-issuer=https://auth.codestra.co/realms/codestra
-resource_audience=telnexa-gateway
-outbound_client_id=telnexa-gateway
-machine_grant=client_credentials
-maximum_token_lifetime_seconds=300
-```
+## Separate identity trusts
 
-Inbound API tokens must have the exact `telnexa-gateway` audience, an approved
-`azp`, a tenant and account binding, a `jti`, and the exact operation scope.
-Middleware normally receives:
+The local portal continues to use `https://api.telnexa.co/auth/realms/telnexa`,
+`telnexa-api`, and its sole private Keycloak JWKS endpoint. Its access-token
+validator now requires the claims using PyJWT's supported `require` option.
 
-```text
-sms.send
-sms.status.read
-```
+The additive Codestra **machine-only** trust is disabled by default. It requires
+`CODESTRA_OIDC_ENABLED=true` and a nonempty `CODESTRA_OIDC_ALLOWED_AZP` allowlist
+provisioned outside Git. It accepts only the fixed Codestra issuer
+`https://auth.codestra.co/realms/codestra`, exact audience `telnexa-gateway`, RSA
+signatures using RS256, a recognized signing key, and mandatory `iss`, `sub`,
+`aud`, `azp`, `iat`, `exp`, `jti`, `tenant_id` and `account_id` claims. The lifetime
+must be positive and no more than 300 seconds. Tenant binding is mandatory.
 
-The relay requests only `sms.events.publish` or `sms.inbound.publish` when it
-publishes callbacks to the middleware API.
+The unverified issuer is only a routing hint to one of two fixed verifiers. It
+cannot set a JWKS URL, bypass signature verification, or grant authorization.
+Codestra JWKS retrieval uses a fixed HTTPS URL, rejects redirects, caps response
+size, and bounds refreshes on unknown key IDs. Machine roles and wildcard scopes
+never grant privileges. `sms.send` and `sms.status.read` remain distinct; a sender
+cannot gain read-back scope implicitly. Existing API read aliases map only to
+`sms.status.read`; unrelated writes still require their own explicit scopes.
 
-## Webhook contract
+`docker-compose.codestra-identity.yml` only exposes the disabled machine-trust
+settings. It does not override local OIDC, publish ports, mount provider secrets,
+redirect callbacks, or activate SMS. The ordinary full exact-head and merge-result
+CI suite includes `tests/test_oidc_contract.py`; no parallel stale CI is needed.
 
-Jasmin callbacks are first authenticated against the root-owned provider-key
-registry. Each key record must contain an authoritative `tenant_id`. The relay
-then creates a stable event ID, builds the canonical Codestra event envelope,
-obtains a short-lived Keycloak token, and posts to:
-
-```text
-${WEBHOOK_TARGET_BASE_URL}/api/v1/telnexa/events
-```
-
-The callback requires OIDC bearer authentication, mTLS in production, and an
-HMAC-SHA256 signature over:
+## Durable callback authority
 
 ```text
-v1
-POST
-/api/v1/telnexa/events
-<unix-timestamp>
-<event-id>
-telnexa-gateway
-<sha256-body>
+Jasmin -> authenticated callback relay
+       -> /internal/v1/provider-events/jasmin
+       -> Telnexa durable provider-event inbox
+       -> local state, billing and STOP/HELP processing
+       -> durable outbox -> governed Middleware receiver
 ```
 
-Canonical headers include `Idempotency-Key`, tenant, event type, source,
-timestamp, signature, and correlation ID. Stable event IDs make provider retries
-idempotent at the middleware inbox.
+Provider callbacks cannot choose a tenant. Preserve source-key identification,
+raw-body signatures, timestamp validation, durable deduplication, and exact replay
+semantics in the accepted implementation. Do not restore the old branch's direct
+`/api/v1/telnexa/events` dispatch in `docker/webhook-relay/server.py`; that skips
+Telnexa's state/compliance authority. Codestra downstream token provisioning and
+signed outbox delivery still require cross-repository staging evidence before
+activation; this source change does not claim that runtime certification exists.
 
-## Runtime configuration
+## Validation and activation boundary
 
-Use the reviewed Compose override:
-
-```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.codestra-identity.yml \
-  config
-```
-
-The following values remain outside Git:
-
-```text
-TELNEXA_GATEWAY_CLIENT_SECRET_FILE
-TELNEXA_MIDDLEWARE_WEBHOOK_HMAC_FILE
-TELNEXA_MIDDLEWARE_CA_FILE
-TELNEXA_MIDDLEWARE_CLIENT_CERT_FILE
-TELNEXA_MIDDLEWARE_CLIENT_KEY_FILE
-TELNEXA_PROVIDER_KEYS_FILE
-```
-
-## Required CI evidence
-
-Both the exact source SHA and the GitHub merge-result SHA must pass the identity
-contract workflow. The full repository workflow must also pass formatting,
-Ruff, the complete test suite, dependency audit, Compose rendering, non-root
-image validation, and Gitleaks. Checkout credentials are not persisted; the
-secret scanner receives only read access to repository contents and pull-request
-metadata.
-
-Do not activate the override until `telnexa-gateway`, its scopes and audience,
-the middleware receiver, certificates, replay store, and rollback path have all
-passed staging validation.
+Offline tests use generated test-only RSA keys and no network/provider traffic.
+They cover both trusts, disabled defaults, signature failures, missing claims,
+strict audience, allowlists, tenant/account binding, expiry/lifetime, scoped
+read-back, role escalation, bounded key refresh and malformed tokens/JWKS.
+Full CI, independent exact-head review, cross-repository contract validation and
+isolated staging remain mandatory. Source merge never authorizes credential
+installation, live migration, deployment, SMS/email/PSTN delivery or provider
+provisioning. All existing live-effect flags remain unchanged and disabled.

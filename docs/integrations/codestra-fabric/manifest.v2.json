@@ -7,9 +7,11 @@
   "n8n_direct_access": false,
   "jasmin_direct_access": false,
   "smpp_credentials_in_n8n": false,
-  "service_identity": "telnexa-adapter",
+  "service_identity": "telnexa-gateway",
+  "jasmin_internal_username": "telnexa-adapter",
   "event_delivery": "DURABLE_INBOX_AND_TRANSACTIONAL_OUTBOX",
   "unknown_submission_reconcile_before_retry": true,
+  "unknown_submission_blind_resubmit": false,
   "success_authority": "TELNEXA_PROVIDER_RECONCILIATION",
   "capabilities": {
     "SMS_DELIVERY": false,

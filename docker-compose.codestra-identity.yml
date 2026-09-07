@@ -1,47 +1,7 @@
+# Source-only opt-in machine trust. Local portal issuer/audience/JWKS are unchanged.
+# Do not apply until independently reviewed identity and private-route staging pass.
 services:
-  webhook-relay:
-    environment:
-      TELNEXA_ENV: ${TELNEXA_ENV:-staging}
-      KEYCLOAK_TOKEN_ENDPOINT: https://auth.codestra.co/realms/codestra/protocol/openid-connect/token
-      TELNEXA_GATEWAY_CLIENT_ID: telnexa-gateway
-      TELNEXA_GATEWAY_CLIENT_SECRET_FILE: /run/secrets/telnexa_gateway_client_secret
-      WEBHOOK_HMAC_SECRET_FILE: /run/secrets/telnexa_middleware_webhook_hmac
-      TELNEXA_MIDDLEWARE_CA_FILE: /run/secrets/telnexa_middleware_ca
-      TELNEXA_MIDDLEWARE_CLIENT_CERT_FILE: /run/secrets/telnexa_middleware_client_cert
-      TELNEXA_MIDDLEWARE_CLIENT_KEY_FILE: /run/secrets/telnexa_middleware_client_key
-    secrets:
-      - telnexa_gateway_client_secret
-      - telnexa_middleware_webhook_hmac
-      - telnexa_middleware_ca
-      - telnexa_middleware_client_cert
-      - telnexa_middleware_client_key
-
-  billing-migrate:
-    environment:
-      OIDC_ISSUER: https://auth.codestra.co/realms/codestra
-      OIDC_AUDIENCE: telnexa-gateway
-      OIDC_ALLOWED_AZP: ${OIDC_ALLOWED_AZP:?set middleware-api and approved machine callers}
-
   billing-api:
     environment:
-      OIDC_ISSUER: https://auth.codestra.co/realms/codestra
-      OIDC_AUDIENCE: telnexa-gateway
-      OIDC_ALLOWED_AZP: ${OIDC_ALLOWED_AZP:?set middleware-api and approved machine callers}
-
-  billing-worker:
-    environment:
-      OIDC_ISSUER: https://auth.codestra.co/realms/codestra
-      OIDC_AUDIENCE: telnexa-gateway
-      OIDC_ALLOWED_AZP: ${OIDC_ALLOWED_AZP:?set middleware-api and approved machine callers}
-
-secrets:
-  telnexa_gateway_client_secret:
-    file: ${TELNEXA_GATEWAY_CLIENT_SECRET_FILE:?set root-owned Keycloak client-secret path}
-  telnexa_middleware_webhook_hmac:
-    file: ${TELNEXA_MIDDLEWARE_WEBHOOK_HMAC_FILE:?set root-owned webhook HMAC path}
-  telnexa_middleware_ca:
-    file: ${TELNEXA_MIDDLEWARE_CA_FILE:?set approved middleware CA path}
-  telnexa_middleware_client_cert:
-    file: ${TELNEXA_MIDDLEWARE_CLIENT_CERT_FILE:?set approved client certificate path}
-  telnexa_middleware_client_key:
-    file: ${TELNEXA_MIDDLEWARE_CLIENT_KEY_FILE:?set approved client private-key path}
+      CODESTRA_OIDC_ENABLED: ${CODESTRA_OIDC_ENABLED:-false}
+      CODESTRA_OIDC_ALLOWED_AZP: ${CODESTRA_OIDC_ALLOWED_AZP:-}

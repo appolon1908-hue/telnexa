@@ -2,31 +2,23 @@ import json
 import os
 import time
 import urllib.request
-
 import jwt
 from fastapi import HTTPException
 
-CANONICAL_ISSUER = "https://auth.codestra.co/realms/codestra"
-CANONICAL_AUDIENCE = "telnexa-gateway"
-MAX_MACHINE_TOKEN_LIFETIME_SECONDS = 300
+from billing.codestra_identity import ISSUER as CODESTRA_ISSUER
+from billing.codestra_identity import token_issuer, validate_codestra_token
+
 _cache = {"at": 0.0, "keys": []}
 ROLE_SCOPES = {
     "OWNER": {"*"},
     "ADMIN": {"*"},
-    "BILLING": {"billing.read", "sms.read", "sms.status.read"},
-    "DEVELOPER": {
-        "sms.send",
-        "sms.read",
-        "sms.status.read",
-        "sms.bulk",
-        "sms.webhook",
-        "sms.number.read",
-    },
-    "SUPPORT": {"sms.read", "sms.status.read", "sms.number.read"},
-    "READ_ONLY": {"sms.read", "sms.status.read", "sms.number.read", "billing.read"},
+    "BILLING": {"billing.read", "sms.read"},
+    "DEVELOPER": {"sms.send", "sms.read", "sms.bulk", "sms.webhook", "sms.number.read"},
+    "SUPPORT": {"sms.read", "sms.number.read"},
+    "READ_ONLY": {"sms.read", "sms.number.read", "billing.read"},
 }
 ALIASES = {
-    "read": "sms.status.read",
+    "read": "sms.read",
     "messages:write": "sms.send",
     "bulk:write": "sms.bulk",
     "webhooks:write": "sms.webhook",
@@ -34,50 +26,32 @@ ALIASES = {
     "contacts:write": "sms.send",
     "campaigns:write": "sms.bulk",
 }
-SCOPE_EQUIVALENTS = {
-    "sms.read": {"sms.read", "sms.status.read"},
-    "sms.status.read": {"sms.read", "sms.status.read"},
-}
 
 
 def _jwks():
     now = time.monotonic()
     if now - _cache["at"] > 300:
-        issuer = os.environ.get("OIDC_ISSUER", CANONICAL_ISSUER).rstrip("/")
-        if issuer != CANONICAL_ISSUER:
-            raise HTTPException(503, "canonical_identity_unavailable")
-        with urllib.request.urlopen(
-            issuer + "/protocol/openid-connect/certs", timeout=5
-        ) as response:
-            document = json.load(response)
-        keys = document.get("keys")
-        if not isinstance(keys, list) or not keys:
-            raise HTTPException(503, "identity_keys_unavailable")
-        _cache.update(at=now, keys=keys)
-    return {key["kid"]: key for key in _cache["keys"] if isinstance(key, dict) and key.get("kid")}
-
-
-def _validate_machine_token_lifetime(claims):
-    try:
-        issued_at = int(claims["iat"])
-        expires_at = int(claims["exp"])
-    except (KeyError, TypeError, ValueError):
-        raise HTTPException(401, "invalid_access_token")
-    lifetime = expires_at - issued_at
-    now = int(time.time())
-    if lifetime <= 0 or lifetime > MAX_MACHINE_TOKEN_LIFETIME_SECONDS:
-        raise HTTPException(401, "machine_token_lifetime_invalid")
-    if issued_at > now + 60:
-        raise HTTPException(401, "machine_token_issued_in_future")
+        issuer = os.environ["OIDC_ISSUER"].rstrip("/")
+        jwks_url = os.environ.get("OIDC_JWKS_URL", issuer + "/protocol/openid-connect/certs")
+        if jwks_url != "http://keycloak:8080/auth/realms/telnexa/protocol/openid-connect/certs":
+            raise HTTPException(503, "canonical_identity_jwks_unavailable")
+        # The value is compared to the sole private Keycloak URL immediately above.
+        with urllib.request.urlopen(jwks_url, timeout=5) as response:  # nosec B310
+            _cache.update(at=now, keys=json.load(response)["keys"])
+    return {key["kid"]: key for key in _cache["keys"]}
 
 
 def validate_bearer(authorization: str | None, tenant_id: str | None, required: str = "read"):
     if not authorization or not authorization.startswith("Bearer "):
         return None
     token = authorization[7:]
-    issuer = os.environ.get("OIDC_ISSUER", CANONICAL_ISSUER).rstrip("/")
-    audience = os.environ.get("OIDC_AUDIENCE", CANONICAL_AUDIENCE)
-    if issuer != CANONICAL_ISSUER or audience != CANONICAL_AUDIENCE:
+    # The untrusted issuer selects ONLY a fixed verifier, never a URL or grants.
+    # Signature, issuer, audience, client, tenant and scope are checked there.
+    if token_issuer(token) == CODESTRA_ISSUER:
+        return validate_codestra_token(token, tenant_id, required)
+    issuer = os.environ.get("OIDC_ISSUER", "").rstrip("/")
+    audience = os.environ.get("OIDC_AUDIENCE", "telnexa-api")
+    if issuer != "https://api.telnexa.co/auth/realms/telnexa" or audience != "telnexa-api":
         raise HTTPException(503, "canonical_identity_unavailable")
     try:
         header = jwt.get_unverified_header(token)
@@ -90,20 +64,14 @@ def validate_bearer(authorization: str | None, tenant_id: str | None, required: 
             algorithms=["RS256"],
             issuer=issuer,
             audience=audience,
-            options={
-                "require": ["exp", "iat", "jti", "sub", "iss", "aud", "azp"],
-            },
+            options={"require": ["exp", "iat", "jti", "sub", "iss", "aud", "azp"]},
         )
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(401, "invalid_access_token")
-    _validate_machine_token_lifetime(claims)
-
     allowed_clients = {
-        value.strip()
-        for value in os.environ.get("OIDC_ALLOWED_AZP", "").split(",")
-        if value.strip()
+        value for value in os.environ.get("OIDC_ALLOWED_AZP", "").split(",") if value
     }
     azp = claims.get("azp")
     if not allowed_clients or azp not in allowed_clients:
@@ -113,21 +81,17 @@ def validate_bearer(authorization: str | None, tenant_id: str | None, required: 
     if not tenant_id or not bound_tenant or tenant_id != bound_tenant or not account_id:
         raise HTTPException(403, "tenant_or_account_binding_required")
     roles = set(claims.get("realm_access", {}).get("roles", []))
-    scopes = set(str(claims.get("scope", "")).split())
+    scopes = set(claims.get("scope", "").split())
     grants = set(scopes)
     for role in roles:
         grants |= ROLE_SCOPES.get(role, set())
     needed = ALIASES.get(required, required)
-    acceptable = SCOPE_EQUIVALENTS.get(needed, {needed})
-    if "*" not in grants and not acceptable.intersection(grants):
+    if "*" not in grants and needed not in grants:
         raise HTTPException(403, "insufficient_scope")
     return {
         "tenant_id": bound_tenant,
         "account_id": account_id,
         "subject": claims.get("sub"),
-        "authorized_party": azp,
-        "audience": CANONICAL_AUDIENCE,
         "roles": sorted(roles),
         "scopes": sorted(scopes),
-        "token_id": claims.get("jti"),
     }
