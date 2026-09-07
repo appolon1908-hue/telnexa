@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "status": "SOURCE_CERTIFICATION_ONLY",
+  "sdk": {
+    "repository": "appolon1908-hue/SDK-repository",
+    "source_sha": "63c793e88cca5daecfb5c8a688b8674ab288c522",
+    "openapi_path": "contracts/openapi/codestra-communications.openapi.yaml",
+    "asyncapi_path": "contracts/asyncapi/codestra-events.asyncapi.yaml"
+  },
+  "middleware": {
+    "repository": "appolon1908-hue/Middleware-",
+    "source_sha": "d7fcb30dc70ed54bd7e444e4c2ab59f5b5b5d24e",
+    "command_schema_path": "contracts/telnexa-sms-command.v1.schema.json",
+    "connector_manifest_path": "connectors/manifests/telnexa-sms.connector.json"
+  },
+  "telnexa": {
+    "repository": "appolon1908-hue/telnexa",
+    "branch": "feat/communications-api-v1-sms-provider",
+    "source_identity": "EXACT_CHECKED_OUT_HEAD"
+  },
+  "command": {
+    "command_type": "sms.message.submit.v1",
+    "target": "telnexa-sms",
+    "capability": "SMS_DELIVERY",
+    "payload_fields": [
+      "message_id",
+      "channel",
+      "destination",
+      "sender",
+      "content",
+      "encoding",
+      "characters",
+      "segments",
+      "category",
+      "client_reference",
+      "scheduled_at",
+      "billing_account_id",
+      "campaign_id"
+    ]
+  },
+  "provider_events": [
+    "sms.message.delivered.v1",
+    "sms.message.failed.v1",
+    "sms.inbound.received.v1",
+    "sms.recipient.opted-out.v1",
+    "sms.help-requested.v1"
+  ],
+  "unknown_outcome_rule": {
+    "provider_submission_attempts": 1,
+    "provider_resubmissions": 0,
+    "readback_required": true,
+    "maximum_readback_attempts": 3,
+    "unresolved_state": "manual_review"
+  },
+  "safety": {
+    "SMS_DELIVERY": false,
+    "LIVE_SMS_DELIVERY": false,
+    "JASMIN_LIVE_SUBMISSION": false,
+    "SERVER_DEPLOYED": false,
+    "SMS_SENT": false
+  }
+}

@@ -10,9 +10,35 @@
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
   "bruteForceProtected": true,
+  "permanentLockout": false,
+  "failureFactor": 10,
+  "waitIncrementSeconds": 60,
+  "quickLoginCheckMilliSeconds": 1000,
+  "minimumQuickLoginWaitSeconds": 60,
+  "maxFailureWaitSeconds": 900,
   "accessTokenLifespan": 300,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 28800,
+  "eventsEnabled": true,
+  "eventsExpiration": 2592000,
+  "adminEventsEnabled": true,
+  "adminEventsDetailsEnabled": true,
+  "enabledEventTypes": [
+    "LOGIN", "LOGIN_ERROR", "LOGOUT", "LOGOUT_ERROR", "CODE_TO_TOKEN", "CODE_TO_TOKEN_ERROR",
+    "CLIENT_LOGIN", "CLIENT_LOGIN_ERROR", "REFRESH_TOKEN", "REFRESH_TOKEN_ERROR",
+    "UPDATE_TOTP", "UPDATE_TOTP_ERROR", "REMOVE_TOTP", "REMOVE_TOTP_ERROR",
+    "VERIFY_EMAIL", "VERIFY_EMAIL_ERROR"
+  ],
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA256",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "requiredActions": [
+    {"alias":"CONFIGURE_TOTP","name":"Configure OTP","providerId":"CONFIGURE_TOTP","enabled":true,"defaultAction":true,"priority":10},
+    {"alias":"VERIFY_EMAIL","name":"Verify Email","providerId":"VERIFY_EMAIL","enabled":true,"defaultAction":true,"priority":20}
+  ],
   "roles": {"realm": [
     {"name":"OWNER"},{"name":"ADMIN"},{"name":"BILLING"},{"name":"DEVELOPER"},{"name":"SUPPORT"},{"name":"READ_ONLY"}
   ]},
@@ -35,7 +61,7 @@
     "clientId":"telnexa-portal","name":"Telnexa Portal","enabled":true,"publicClient":true,
     "standardFlowEnabled":true,"directAccessGrantsEnabled":false,"serviceAccountsEnabled":false,
     "rootUrl":"https://api.telnexa.co","baseUrl":"/dashboard",
-    "redirectUris":["https://api.telnexa.co/*"],"webOrigins":["https://api.telnexa.co"],
+    "redirectUris":["https://api.telnexa.co/*","https://app.telnexa.co/*"],"webOrigins":["https://api.telnexa.co","https://app.telnexa.co"],
     "attributes":{"pkce.code.challenge.method":"S256"},
     "protocolMappers":[{"name":"realm-roles","protocol":"openid-connect","protocolMapper":"oidc-usermodel-realm-role-mapper","config":{"claim.name":"realm_access.roles","jsonType.label":"String","multivalued":"true","access.token.claim":"true","id.token.claim":"true","userinfo.token.claim":"true","user.attribute":"foo"}}],
     "defaultClientScopes":["web-origins","acr","profile","roles","email","tenant-bindings","api-audience"]

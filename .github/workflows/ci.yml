@@ -3,17 +3,49 @@ name: Telnexa exact-head CI
 on:
   pull_request:
   push:
-    branches: [main, "agent/**", "codex/**"]
+    branches: [main]
 
 permissions:
   contents: read
+  pull-requests: read
+
+env:
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  TELNEXA_KEYCLOAK_IMAGE: telnexa/keycloak@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  TELNEXA_JASMIN_IMAGE: telnexa/jasmin@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  TELNEXA_WEBHOOK_RELAY_IMAGE: telnexa/webhook-relay@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  TELNEXA_NGINX_IMAGE: telnexa/nginx@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  TELNEXA_BILLING_IMAGE: telnexa/billing@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  TELNEXA_GRAFANA_IMAGE: grafana/grafana@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 
 jobs:
   quality-and-tests:
+    name: Exact source quality and tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres@sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168
+        env:
+          POSTGRES_USER: telnexa_ci
+          POSTGRES_PASSWORD: ci-placeholder-only
+          POSTGRES_DB: telnexa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U telnexa_ci -d telnexa_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source identity
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.11"
           cache: pip
@@ -21,13 +53,20 @@ jobs:
       - name: Install exact test and quality dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r billing/requirements.txt ruff pip-audit
+          python -m pip install -r billing/requirements.txt ruff pip-audit openapi-spec-validator
       - name: Full format and lint gate
         run: |
           python -m ruff format --check billing tests
           python -m ruff check billing tests docker scripts
       - name: Full test suite
         run: python -m pytest -q
+      - name: PostgreSQL migration contract
+        env:
+          BILLING_DATABASE_URL: postgresql+psycopg://telnexa_ci:ci-placeholder-only@127.0.0.1:5432/telnexa_ci
+        run: |
+          python -m billing.migrate
+          python -m billing.migrate
+          python -m scripts.validate_postgres_migrations
       - name: Dependency audit
         run: python -m pip_audit -r billing/requirements.txt --progress-spinner off
       - name: Compose contract
@@ -49,19 +88,102 @@ jobs:
           KEYCLOAK_ADMIN_PASSWORD_FILE: /tmp/ci-keycloak-admin
           KEYCLOAK_DB_PASSWORD_FILE: /tmp/ci-keycloak-db
           TELNEXA_PROVIDER_KEYS_FILE: /tmp/ci-provider-keys
+          TELNEXA_MIDDLEWARE_CA_FILE: /tmp/ci-middleware-ca
+          TELNEXA_MIDDLEWARE_CLIENT_CERT_FILE: /tmp/ci-middleware-client-cert
+          TELNEXA_MIDDLEWARE_CLIENT_KEY_FILE: /tmp/ci-middleware-client-key
         run: docker compose config --quiet
       - name: Non-root container build
         run: |
-          docker build -f billing/Dockerfile -t telnexa-ci:${GITHUB_SHA} .
+          docker build --build-arg SOURCE_COMMIT_SHA="$SOURCE_SHA" -f billing/Dockerfile -t telnexa-ci:${GITHUB_SHA} .
           test "$(docker image inspect telnexa-ci:${GITHUB_SHA} --format '{{.Config.User}}')" != "root"
 
+  merge-result-quality-and-tests:
+    name: Exact merge-result quality and tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+    services:
+      postgres:
+        image: postgres@sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168
+        env:
+          POSTGRES_USER: telnexa_ci
+          POSTGRES_PASSWORD: ci-placeholder-only
+          POSTGRES_DB: telnexa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U telnexa_ci -d telnexa_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact merge-result identity
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: billing/requirements.txt
+      - name: Install exact test and quality dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r billing/requirements.txt ruff pip-audit openapi-spec-validator
+      - name: Full merge-result gate
+        run: |
+          python -m ruff format --check billing tests
+          python -m ruff check billing tests docker scripts
+          python -m pytest -q
+          python -m pip_audit -r billing/requirements.txt --progress-spinner off
+      - name: PostgreSQL merge-result migration contract
+        env:
+          BILLING_DATABASE_URL: postgresql+psycopg://telnexa_ci:ci-placeholder-only@127.0.0.1:5432/telnexa_ci
+        run: |
+          python -m billing.migrate
+          python -m billing.migrate
+          python -m scripts.validate_postgres_migrations
+      - name: Compose contract
+        env:
+          RABBITMQ_USER: ci
+          RABBITMQ_PASSWORD: ci-placeholder
+          REDIS_PASSWORD: ci-placeholder
+          JASMIN_ADMIN_PASSWORD: ci-placeholder
+          JASMIN_API_PASSWORD: ci-placeholder
+          WEBHOOK_HMAC_SECRET: ci-placeholder
+          BILLING_DB_PASSWORD: ci-placeholder
+          BILLING_ADMIN_TOKEN: ci-placeholder
+          BILLING_JWT_SECRET: ci-placeholder-value-with-required-length
+          BILLING_MIDDLEWARE_API_KEY: ci-placeholder
+          BILLING_MIDDLEWARE_HMAC_SECRET: ci-placeholder
+          GRAFANA_ADMIN_PASSWORD: ci-placeholder
+          OIDC_ALLOWED_AZP: telnexa-ci
+          TELNEXA_METRICS_TOKEN_FILE: /tmp/ci-metrics-token
+          KEYCLOAK_ADMIN_PASSWORD_FILE: /tmp/ci-keycloak-admin
+          KEYCLOAK_DB_PASSWORD_FILE: /tmp/ci-keycloak-db
+          TELNEXA_PROVIDER_KEYS_FILE: /tmp/ci-provider-keys
+          TELNEXA_MIDDLEWARE_CA_FILE: /tmp/ci-middleware-ca
+          TELNEXA_MIDDLEWARE_CLIENT_CERT_FILE: /tmp/ci-middleware-client-cert
+          TELNEXA_MIDDLEWARE_CLIENT_KEY_FILE: /tmp/ci-middleware-client-key
+        run: docker compose config --quiet
+      - name: Non-root merge-result container build
+        run: |
+          docker build --build-arg SOURCE_COMMIT_SHA="$SOURCE_SHA" -f billing/Dockerfile -t telnexa-merge-ci:${GITHUB_SHA} .
+          test "$(docker image inspect telnexa-merge-ci:${GITHUB_SHA} --format '{{.Config.User}}')" != "root"
+
   secret-scan:
+    name: Secret scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Gitleaks tree and PR range
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
