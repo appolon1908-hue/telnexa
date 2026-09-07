@@ -63,7 +63,9 @@ jobs:
       - name: Reject committed secrets
         run: |
           docker run --rm -v "$PWD:/repo:ro" "$GITLEAKS_IMAGE" \
-            git --redact --no-banner /repo
+            git --redact --no-banner \
+            --gitleaks-ignore-path /repo/.gitleaksignore \
+            --log-opts="$SOURCE_SHA" /repo
 
       - name: Run automated tests against the exact image source
         if: matrix.name == 'billing'
