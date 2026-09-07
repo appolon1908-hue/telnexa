@@ -35,6 +35,8 @@ jobs:
           printf '%s\n' "$EXPECTED_SHA" > /tmp/issue29-source/SOURCE_SHA
           cd /tmp/issue29-source
           sha256sum source.tar.gz SOURCE_SHA > SHA256SUMS
+      - name: Download pinned public formatter for offline reproduction
+        run: python -m pip download --only-binary=:all: --no-deps ruff==0.16.6 -d /tmp/issue29-source
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: issue29-source-${{ github.event.pull_request.head.sha }}
