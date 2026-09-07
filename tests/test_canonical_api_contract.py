@@ -123,6 +123,8 @@ def test_keycloak_realm_requires_mfa_and_security_audit():
     assert actions["CONFIGURE_TOTP"]["defaultAction"] is True
     assert realm["verifyEmail"] is True
     assert realm["bruteForceProtected"] is True
+    assert realm["revokeRefreshToken"] is True
+    assert realm["refreshTokenMaxReuse"] == 0
     assert realm["eventsEnabled"] is True
     assert realm["adminEventsEnabled"] is True
     assert realm["adminEventsDetailsEnabled"] is True
