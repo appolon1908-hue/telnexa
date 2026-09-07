@@ -21,6 +21,8 @@ fi
   -s minimumQuickLoginWaitSeconds=60 \
   -s maxFailureWaitSeconds=900 \
   -s accessTokenLifespan=300 \
+  -s revokeRefreshToken=true \
+  -s refreshTokenMaxReuse=0 \
   -s ssoSessionIdleTimeout=1800 \
   -s ssoSessionMaxLifespan=28800 \
   -s otpPolicyType=totp \
@@ -57,10 +59,12 @@ esac
   -s 'webOrigins=["https://api.telnexa.co","https://app.telnexa.co"]'
 
 realm=$(/opt/keycloak/bin/kcadm.sh get realms/telnexa \
-  --fields verifyEmail,bruteForceProtected,eventsEnabled,adminEventsEnabled,adminEventsDetailsEnabled)
+  --fields verifyEmail,bruteForceProtected,revokeRefreshToken,refreshTokenMaxReuse,eventsEnabled,adminEventsEnabled,adminEventsDetailsEnabled)
 for field in verifyEmail bruteForceProtected eventsEnabled adminEventsEnabled adminEventsDetailsEnabled; do
   grep -Eq '"'"$field"'"[[:space:]]*:[[:space:]]*true' <<<"$realm"
 done
+grep -Eq '"revokeRefreshToken"[[:space:]]*:[[:space:]]*true' <<<"$realm"
+grep -Eq '"refreshTokenMaxReuse"[[:space:]]*:[[:space:]]*0' <<<"$realm"
 totp=$(/opt/keycloak/bin/kcadm.sh get authentication/required-actions/CONFIGURE_TOTP -r telnexa \
   --fields enabled,defaultAction)
 grep -Eq '"enabled"[[:space:]]*:[[:space:]]*true' <<<"$totp"

@@ -29,7 +29,6 @@ def test_release_dependencies_are_immutable() -> None:
         "docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9",
         "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
         "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6",
-        "actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a",
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ):
         assert action in WORKFLOW
@@ -77,7 +76,7 @@ def test_scan_precedes_production_promotion_and_uses_exact_digest() -> None:
     collision = WORKFLOW.index("Reject an immutable source-tag collision before signing")
     sign = WORKFLOW.index("Sign the passing immutable digest with GitHub OIDC")
     attest = WORKFLOW.index("Attest the passing immutable digest")
-    verify = WORKFLOW.index("Independently verify signing identity and bind evidence")
+    verify = WORKFLOW.index("Independently verify signing identity and archive verified predicates")
     promote = WORKFLOW.index("Promote only the fully certified digest to the immutable source tag")
     assert scan < collision < sign < attest < verify < promote
     assert '"${IMAGE}@${CANDIDATE_DIGEST}"' in WORKFLOW
@@ -95,9 +94,47 @@ def test_release_is_retry_safe_and_attestation_is_verified() -> None:
     assert "echo 'exists=true' >> \"$GITHUB_OUTPUT\"" in WORKFLOW
     assert "cosign sign --yes" in WORKFLOW
     assert "cosign verify" in WORKFLOW
+    assert "cosign attest --yes --type slsaprovenance1" in WORKFLOW
+    assert "cosign attest --yes --type spdxjson" in WORKFLOW
+    assert "cosign verify-attestation --type slsaprovenance1" in WORKFLOW
+    assert "cosign verify-attestation --type spdxjson" in WORKFLOW
+    assert WORKFLOW.count("jq -s -e") == 4
+    assert "sourceCommit == $source" in WORKFLOW
+    assert "registryDigest == $digest" in WORKFLOW
     assert "--certificate-identity" in WORKFLOW
     assert "--certificate-oidc-issuer" in WORKFLOW
     assert "sha256sum -c SHA256SUMS" in WORKFLOW
+
+
+def test_archived_predicates_are_extracted_from_verified_dsse() -> None:
+    assert "provenance.request.json" in WORKFLOW
+    assert "sbom.request.spdx.json" in WORKFLOW
+    assert "--predicate provenance.request.json" in WORKFLOW
+    assert "--predicate sbom.request.spdx.json" in WORKFLOW
+    assert "provenance-verification.json > provenance.attested.json" in WORKFLOW
+    assert "sbom-verification.json > sbom.attested.spdx.json" in WORKFLOW
+    assert WORKFLOW.count("any($statement.subject[]?; .digest.sha256 == $digest_hex)") == 2
+    assert "expected exactly one verified provenance predicate for the exact image" in WORKFLOW
+    assert "expected exactly one verified SPDX predicate for the exact image" in WORKFLOW
+    assert "mv provenance.attested.json provenance.json" in WORKFLOW
+    assert "mv sbom.attested.spdx.json sbom.spdx.json" in WORKFLOW
+    assert "rm -f provenance.request.json sbom.request.spdx.json" in WORKFLOW
+
+    attest = WORKFLOW.index("Attest the passing immutable digest")
+    verify = WORKFLOW.index("Independently verify signing identity and archive verified predicates")
+    extract_provenance = WORKFLOW.index("> provenance.attested.json")
+    extract_spdx = WORKFLOW.index("> sbom.attested.spdx.json")
+    checksum = WORKFLOW.index("sha256sum SOURCE_SHA IMAGE_DIGEST IMAGE_REF")
+    promote = WORKFLOW.index("Promote only the fully certified digest")
+    assert attest < verify < extract_provenance < extract_spdx < checksum < promote
+
+
+def test_private_repository_release_uses_registry_native_attestations() -> None:
+    assert "actions/attest-build-provenance" not in WORKFLOW
+    assert "attestations: write" not in WORKFLOW
+    assert "push-to-registry" not in WORKFLOW
+    assert "provenance.json" in WORKFLOW
+    assert "sbom.spdx.json" in WORKFLOW
 
 
 def test_release_workflow_has_no_runtime_deployment_or_delivery_action() -> None:
