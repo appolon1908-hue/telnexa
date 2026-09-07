@@ -1,0 +1,43 @@
+name: Issue 29 private SMS validation
+
+on:
+  pull_request:
+    paths:
+      - 'billing/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/issue29-validation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue29-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  source-reproduction:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Archive only tracked source, never runner secrets or runtime evidence
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          mkdir -p /tmp/issue29-source
+          git archive --format=tar.gz HEAD > /tmp/issue29-source/source.tar.gz
+          printf '%s\n' "$EXPECTED_SHA" > /tmp/issue29-source/SOURCE_SHA
+          cd /tmp/issue29-source
+          sha256sum source.tar.gz SOURCE_SHA > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue29-source-${{ github.event.pull_request.head.sha }}
+          path: /tmp/issue29-source/
+          if-no-files-found: error
+          retention-days: 1
