@@ -1,0 +1,23 @@
+services:
+  prometheus:
+    volumes:
+    - type: bind
+      source: ./config/prometheus/prometheus.central.yml
+      target: /etc/prometheus/prometheus.yml
+      read_only: true
+      bind:
+        create_host_path: false
+    secrets:
+    - source: alertmanager_ca
+      target: alertmanager_ca
+    - source: alertmanager_client_cert
+      target: alertmanager_client_cert
+    - source: alertmanager_client_key
+      target: alertmanager_client_key
+secrets:
+  alertmanager_ca:
+    file: ${ALERTMANAGER_CA_FILE:?verified private alert transport file required}
+  alertmanager_client_cert:
+    file: ${ALERTMANAGER_CLIENT_CERT_FILE:?verified private alert transport file required}
+  alertmanager_client_key:
+    file: ${ALERTMANAGER_CLIENT_KEY_FILE:?verified private alert transport file required}
