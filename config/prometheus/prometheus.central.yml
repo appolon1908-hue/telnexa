@@ -7,6 +7,7 @@ global:
     codestra_business: telnexa
     owner: appolon1908-hue
     prometheus: telnexa-provider
+    host: 37.27.128.39
 rule_files:
 - /etc/prometheus/alerts.yml
 scrape_configs:

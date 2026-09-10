@@ -28,6 +28,7 @@ class CentralAlertingTests(unittest.TestCase):
             ROOT / "config/prometheus/prometheus.central.yml",
         ]
         data = yaml.safe_load(next(p for p in paths if p.exists()).read_text())
+        self.assertEqual(data["global"]["external_labels"]["host"], "37.27.128.39")
         transport = data["alerting"]["alertmanagers"][0]
         self.assertEqual(transport["scheme"], "https")
         self.assertEqual(transport["api_version"], "v2")
