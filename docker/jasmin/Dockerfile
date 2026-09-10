@@ -53,6 +53,7 @@ RUN apk add --no-cache --upgrade \
        jemalloc=5.3.0-r6 \
        libapk=3.0.8-r0 \
        libcrypto3=3.5.8-r0 \
+       libuuid=2.42.3-r1 \
        libgcc=15.2.0-r5 \
        libssl3=3.5.8-r0 \
        libstdc++=15.2.0-r5 \
