@@ -4,6 +4,10 @@ Prometheus evaluates provider alerts. The opt-in compose.central-alerting.yml
 overlay sends native API v2 alerts to the core private mTLS listener at
 10.40.0.1:19093 with the verified alertmanager.core.codestra.internal server
 identity. The base deployment remains usable before this private transport exists.
+The overlay retains internal monitoring/billing scrapes and adds a dedicated
+non-internal `alerting_egress` network for the private host destination. It
+publishes no Prometheus ports. Host firewall policy must restrict this egress
+to the approved private Alertmanager listener.
 Native Alertmanager is not exposed publicly. Certificate validation is mandatory.
 Supply ALERTMANAGER_CA_FILE, ALERTMANAGER_CLIENT_CERT_FILE, and
 ALERTMANAGER_CLIENT_KEY_FILE as protected file paths; do not put values in Git.

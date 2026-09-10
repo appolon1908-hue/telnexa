@@ -1,5 +1,9 @@
 services:
   prometheus:
+    networks:
+    - monitoring
+    - billing
+    - alerting_egress
     volumes:
     - type: bind
       source: ./config/prometheus/prometheus.central.yml
@@ -21,3 +25,6 @@ secrets:
     file: ${ALERTMANAGER_CLIENT_CERT_FILE:?verified private alert transport file required}
   alertmanager_client_key:
     file: ${ALERTMANAGER_CLIENT_KEY_FILE:?verified private alert transport file required}
+networks:
+  alerting_egress:
+    internal: false
