@@ -1,0 +1,102 @@
+name: Issue 29 real cross-repository read-back
+
+on:
+  pull_request:
+    paths:
+      - 'billing/**'
+      - 'scripts/certify_private_sms_contract.py'
+      - 'scripts/certify_sms_cross_repository.py'
+      - 'tests/test_cross_repository_lab_guards.py'
+      - '.github/workflows/issue29-cross-repository.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue29-cross-repo-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cross-repository:
+    name: Real Middleware Telnexa GET (${{ matrix.revision }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [source, merge-result]
+    services:
+      postgres:
+        image: postgres@sha256:d4bb0a8c1b7bb2e29f976d099e7bfb9a5d8858cffe9e46b35cd302cd1f1f8168
+        env:
+          POSTGRES_USER: telnexa_ci
+          POSTGRES_PASSWORD: ci-placeholder-only
+          POSTGRES_DB: telnexa_issue29_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U telnexa_ci -d telnexa_issue29_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      SOURCE_SHA: ${{ matrix.revision == 'source' && github.event.pull_request.head.sha || github.sha }}
+      MIDDLEWARE_SOURCE_SHA: 882f7378a27ca0a87c1cb496c5d24e73984caf65
+      BILLING_DATABASE_URL: postgresql+psycopg://telnexa_ci:ci-placeholder-only@127.0.0.1:5432/telnexa_issue29_ci
+      TELNEXA_DISPOSABLE_CERTIFICATION: 'true'
+      LIVE_SMS_DELIVERY: 'false'
+      LIVE_EMAIL_DELIVERY: 'false'
+      LIVE_PSTN_DIALING: 'false'
+      TELNEXA_PRODUCTION_SMS_ENABLED: 'false'
+      SMS_DELIVERY: 'false'
+      SMS_DELIVERY_ENABLED: 'false'
+      EXTERNAL_DELIVERY_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - name: Check out accepted Middleware source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: appolon1908-hue/Middleware-
+          ref: ${{ env.MIDDLEWARE_SOURCE_SHA }}
+          path: _external/middleware
+          persist-credentials: false
+      - name: Verify both exact repositories
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C _external/middleware rev-parse HEAD)" = "$MIDDLEWARE_SOURCE_SHA"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+      - name: Isolated Telnexa application dependencies
+        run: |
+          python -m venv .venv-telnexa
+          .venv-telnexa/bin/python -m pip install -r billing/requirements.txt ruff==0.16.6
+          .venv-telnexa/bin/python -m pip check
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Real hash-locked Middleware runtime dependencies
+        run: |
+          python -m venv .venv-middleware
+          .venv-middleware/bin/python -m pip install --require-hashes -r _external/middleware/requirements-runtime.txt
+          .venv-middleware/bin/python -m pip check
+      - name: Guard tests and source quality
+        run: |
+          .venv-telnexa/bin/python -m ruff check scripts/certify_sms_cross_repository.py tests/test_cross_repository_lab_guards.py
+          .venv-telnexa/bin/python -m ruff format --check scripts/certify_sms_cross_repository.py tests/test_cross_repository_lab_guards.py
+          .venv-telnexa/bin/python -m pytest -q tests/test_cross_repository_lab_guards.py
+      - name: Disposable migrations and real HTTP consumer certification
+        run: |
+          .venv-telnexa/bin/python -m billing.migrate
+          .venv-telnexa/bin/python -m billing.migrate
+          .venv-telnexa/bin/python -m scripts.certify_sms_cross_repository --middleware-dir _external/middleware --middleware-python .venv-middleware/bin/python
+      - name: Upload sanitized proof without credentials or payloads
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue29-cross-repository-${{ matrix.revision }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            issue29-evidence.json
+            issue29-cross-repository-evidence.json
+          if-no-files-found: error
+          retention-days: 30
