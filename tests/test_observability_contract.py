@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -67,7 +68,20 @@ def test_openapi_contract_covers_both_versions():
         spec["components"]["schemas"]["ServiceIdentity"]["properties"]["service_id"]["const"]
         == "telnexa-billing-api"
     )
+    version_pattern = spec["components"]["schemas"]["ObservabilityContract"]["properties"]["contract_version"]["pattern"]
+    assert re.fullmatch(version_pattern, "telnexa.observability.v1")
+    assert re.fullmatch(version_pattern, "telnexa.observability.v2")
 
+
+
+def test_compose_exports_release_identity_to_billing():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    environment = compose["services"]["billing-migrate"]["environment"]
+
+    assert environment["DEPLOYMENT_ENVIRONMENT"] == "${DEPLOYMENT_ENVIRONMENT:?set deployment environment}"
+    assert environment["SOURCE_DEPLOYMENT"] == "${SOURCE_DEPLOYMENT:?set source deployment}"
+    assert environment["TELNEXA_BILLING_IMAGE_DIGEST"] == "${TELNEXA_BILLING_IMAGE_DIGEST:?set exact billing image digest}"
+    assert environment["TELNEXA_CONFIG_DIGEST"] == "${TELNEXA_CONFIG_DIGEST:?set exact config digest}"
 
 def test_manifest_registers_the_runtime_contract_without_enabling_activation():
     manifest = json.loads((ROOT / "monitoring-integration.v1.json").read_text())
