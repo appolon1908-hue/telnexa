@@ -68,7 +68,7 @@ def test_openapi_contract_covers_both_versions():
         spec["components"]["schemas"]["ServiceIdentity"]["properties"]["service_id"]["const"]
         == "telnexa-billing-api"
     )
-    version_pattern = spec["components"]["schemas"]["ObservabilityContract"]["properties"]["
+    version_pattern = spec["components"]["schemas"]["ObservabilityContract"]["properties"][
         "contract_version"
     ]["pattern"]
     assert re.fullmatch(version_pattern, "telnexa.observability.v1")
