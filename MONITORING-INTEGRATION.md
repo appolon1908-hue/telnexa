@@ -16,3 +16,20 @@ The release controller mounts reviewed configuration and artifacts in Middleware
 Keep native backends private. Send UI reads through authenticated Middleware/BFF routes, never browser-held backend credentials. Use release-mounted secrets, approved targets/query templates, tenant and campaign scopes, and structured redacted telemetry. Service registration, green CI and successful ingestion are distinct from verified production coverage.
 
 Acceptance requires the exact source CI result, approved immutable release, registered service/endpoint contracts, fresh telemetry, private authentication, a synthetic alert and recovery evidence. Production activation remains separate. This commit adds the repository's design/onboarding record; it does not instrument or deploy its application.
+
+
+## Implemented service-facing contract
+
+The runtime now exposes an authenticated, read-only service contract at:
+
+- `GET /api/v1/integration/observability`
+- `GET /api/v2/integration/observability`
+
+The contract registers the `telnexa-billing-api` and `telnexa-webhook-relay`
+service units, declares the private Prometheus scrape path, and records the
+monitoring ownership map. It does not receive telemetry writes, expose secrets,
+or create an Odoo integration.
+
+See [the complete Middleware/Odoo route map](docs/TELNEXA_MONITORING_MIDDLEWARE_ODOO_API.md)
+and the machine-readable contract
+[contracts/observability/telnexa-monitoring.openapi.yaml](contracts/observability/telnexa-monitoring.openapi.yaml).
