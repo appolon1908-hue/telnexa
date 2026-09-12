@@ -63,9 +63,10 @@ def test_openapi_contract_covers_both_versions():
         "/api/v1/integration/observability",
         "/api/v2/integration/observability",
     }
-    assert spec["components"]["schemas"]["ServiceIdentity"]["properties"]["service_id"][
-        "const"
-    ] == "telnexa-billing-api"
+    assert (
+        spec["components"]["schemas"]["ServiceIdentity"]["properties"]["service_id"]["const"]
+        == "telnexa-billing-api"
+    )
 
 
 def test_manifest_registers_the_runtime_contract_without_enabling_activation():
