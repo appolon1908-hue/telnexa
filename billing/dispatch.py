@@ -7,6 +7,11 @@ from .adapters.base import NormalizedSubmission, SubmissionOutcome
 from .engine import event, finalize, money, release, reserve, segment_info
 from .provider_capacity import acquire_provider_capacity, release_provider_capacity
 from .production_gates import production_enabled, validate_reserved_canary
+from .production_policy import (
+    ProductionPolicyDenied,
+    reserve_delivery_authority,
+    validate_reserved_policy,
+)
 from .models import (
     Audit,
     BillingAccount,
@@ -37,6 +42,7 @@ def accept_message(
     request_hash,
     actor="commercial-api",
     canary_gate_id=None,
+    production_policy_id=None,
 ):
     account = db.get(BillingAccount, account_id)
     prior = db.scalar(
@@ -52,6 +58,21 @@ def accept_message(
         db, account.tenant_id, destination, sender, category, tenant.plan_id, encoding
     )
     cost, sell = authorized.provider_rate, authorized.sell_rate
+    if production_enabled():
+        authority = reserve_delivery_authority(
+            db,
+            tenant_id=account.tenant_id,
+            sender=sender.sender,
+            destination=destination,
+            category=category,
+            segments=segments,
+            provider_id=authorized.provider.id,
+            country=authorized.route.country,
+            provider_cost=cost.amount * segments,
+            provider_currency=cost.currency,
+        )
+        canary_gate_id = authority.canary_gate_id
+        production_policy_id = authority.policy_id
     message = Message(
         tenant_id=account.tenant_id,
         idempotency_key=key,
@@ -101,6 +122,7 @@ def accept_message(
         selected_provider_id=authorized.provider.id,
         route_decision_id=decision.id,
         canary_gate_id=canary_gate_id,
+        production_policy_id=production_policy_id,
     )
     db.add(job)
     db.flush()
@@ -186,32 +208,57 @@ def process_job(db, job, adapter_factory):
         return
     now = datetime.now(timezone.utc)
     gate = None
-    # Same tenant -> canary lock order as the acceptance path.
+    # Same tenant -> policy/canary lock order as the acceptance path.
     db.scalar(select(Tenant).where(Tenant.id == message.tenant_id).with_for_update())
+    receipt = db.get(SmsAcceptanceReceipt, message.id)
     if production_enabled():
-        gate = validate_reserved_canary(
-            db,
-            job.canary_gate_id,
-            message.tenant_id,
-            message.sender,
-            message.destination,
-            now,
-        )
-        if not gate:
-            release(db, message.reservation_id, message.correlation_id, "canary_gate_denied")
+        try:
+            policy = validate_reserved_policy(
+                db,
+                policy_id=job.production_policy_id,
+                tenant_id=message.tenant_id,
+                sender=message.sender,
+                destination=message.destination,
+                category=receipt.category if receipt else "transactional",
+                provider_id=provider.id,
+                country=decision.country,
+                now=now,
+            )
+        except ProductionPolicyDenied as exc:
+            release(db, message.reservation_id, message.correlation_id, exc.code)
             transition(
                 db,
                 message,
                 "rejected",
-                f"canary-denied:{job.id}",
-                evidence={"reason": "canary_gate_denied"},
+                f"production-policy-denied:{job.id}",
+                evidence={"reason": exc.code},
             )
             job.state = "rejected"
-            job.last_error_code = "canary_gate_denied"
+            job.last_error_code = exc.code
             return
+        if policy.mode == "TRANSACTIONAL_CANARY":
+            gate = validate_reserved_canary(
+                db,
+                job.canary_gate_id,
+                message.tenant_id,
+                message.sender,
+                message.destination,
+                now,
+            )
+            if not gate:
+                release(db, message.reservation_id, message.correlation_id, "canary_gate_denied")
+                transition(
+                    db,
+                    message,
+                    "rejected",
+                    f"canary-denied:{job.id}",
+                    evidence={"reason": "canary_gate_denied"},
+                )
+                job.state = "rejected"
+                job.last_error_code = "canary_gate_denied"
+                return
     from fastapi import HTTPException
 
-    receipt = db.get(SmsAcceptanceReceipt, message.id)
     try:
         if production_enabled() and receipt is None:
             raise HTTPException(403, "submission_receipt_required")
@@ -304,7 +351,13 @@ def process_job(db, job, adapter_factory):
             "sms.submitted",
             f"sms:submitted:{message.id}",
             message.correlation_id,
-            {"message_id": message.id},
+            {
+                "message_id": message.id,
+                "status": "provider_accepted",
+                "provider_message_id": message.provider_message_id,
+                "segments": message.segments,
+                "message_idempotency_key": message.idempotency_key,
+            },
         )
         if gate:
             gate.claimed_count += 1

@@ -28,6 +28,9 @@ from billing.models import (
     SmsReconciliationCase,
     SmsProviderEventInbox,
     SmsProductionCanaryGate,
+    SmsProductionAuthorization,
+    SmsDeliveryPolicy,
+    SmsSystemControl,
     SmsRouteDecision,
     Sender,
     Tenant,
@@ -137,6 +140,8 @@ def test_acceptance_is_durable_and_not_simulated():
     assert message.status == "queued" and message.provider == "Private Jasmin"
     assert db.query(SmsDispatchJob).filter_by(message_id=message.id).count() == 1
     assert db.get(Wallet, db.query(Wallet).one().id).reserved == Decimal("0.040000")
+    local_events = db.query(Outbox).all()
+    assert local_events and all(item.state == "internal" for item in local_events)
 
 
 def test_ambiguous_submission_never_invokes_backup_or_bills():
@@ -193,6 +198,56 @@ def test_delivered_cannot_downgrade_but_late_event_is_preserved():
     assert not transition(db, message, "sent", "e4")
     db.commit()
     assert message.status == "delivered" and len(message.id) == 36
+
+
+def test_middleware_outbox_uses_canonical_envelope_and_local_billing_stays_internal():
+    db, tenant, account = seed_dispatch()
+    message = accept_message(
+        db,
+        account.id,
+        "+491234567",
+        db.query(Sender).one(),
+        "hello",
+        "transactional",
+        "key-canonical-event",
+        "corr-canonical-event",
+        "d" * 64,
+    )
+    db.commit()
+    job = claim_job(db, "test-worker")
+
+    class Accepted:
+        def submit(self, submission):
+            from billing.adapters.base import SubmissionResult
+
+            return SubmissionResult(
+                SubmissionOutcome.ACCEPTED,
+                provider_message_id="provider-canonical-1",
+            )
+
+    process_job(db, job, lambda provider: Accepted())
+    db.commit()
+    lifecycle = db.query(Outbox).filter_by(event_type="sms.submitted").one()
+    envelope = lifecycle.envelope
+    assert lifecycle.id == envelope["event_id"] == envelope["idempotency_key"]
+    assert lifecycle.state == "pending"
+    assert envelope["event_type"] == "codestra.sms.message.provider_accepted"
+    assert envelope["source"] == "telnexa-gateway"
+    assert envelope["tenant_id"] == tenant.id
+    assert envelope["correlation_id"] == message.correlation_id
+    assert envelope["causation_id"] == message.id
+    assert envelope["payload"] == {
+        "message_id": message.id,
+        "status": "provider_accepted",
+        "provider_message_id": "provider-canonical-1",
+        "segments": 1,
+        "message_idempotency_key": "key-canonical-event",
+    }
+    assert envelope["metadata"]["message_idempotency_key"] == "key-canonical-event"
+    assert all(
+        item.state == "internal"
+        for item in db.query(Outbox).filter(Outbox.event_type.like("billing.%")).all()
+    )
 
 
 def test_jasmin_mapping_acceptance_and_ambiguous_timeout(tmp_path):
@@ -542,6 +597,11 @@ def test_stop_start_unstop_consent_ledger_replay_and_tenant_isolation():
 
 def test_closed_canary_gate_stops_queued_job_before_adapter(monkeypatch):
     db, tenant, account = seed_dispatch()
+    provider = db.query(Provider).one()
+    provider.environment = "production"
+    provider.capabilities = {**provider.capabilities, "carrier": "didww"}
+    release_sha = "a" * 40
+    now = datetime.now(timezone.utc)
     gate = SmsProductionCanaryGate(
         gate_key="review-gate",
         stage="SINGLE_DESTINATION",
@@ -557,6 +617,77 @@ def test_closed_canary_gate_stops_queued_job_before_adapter(monkeypatch):
     )
     db.add(gate)
     db.flush()
+    authorization = SmsProductionAuthorization(
+        change_id="review-canary-change",
+        idempotency_key="review-canary-authorization",
+        request_sha256="9" * 64,
+        tenant_id=tenant.id,
+        environment="production",
+        production_owner="owner",
+        approved_senders=["Telnexa"],
+        approved_destinations=["+491234567"],
+        approved_categories=["transactional"],
+        per_minute_segments=1,
+        per_hour_segments=1,
+        per_day_segments=1,
+        provider_id=provider.id,
+        billing_account_id=account.id,
+        max_total_spend_minor=200,
+        spending_currency="USD",
+        account_grain="billing_account",
+        valid_from=now - timedelta(minutes=1),
+        valid_until=now + timedelta(minutes=5),
+        monitoring_owner="monitor",
+        escalation_owner="escalation",
+        rollback_owner="rollback",
+        kill_switch_procedure="set production flag false",
+        approved_release_sha=release_sha,
+        approved_by="reviewer",
+        authorization_timestamp=now,
+        review_at=now + timedelta(minutes=5),
+        reason="bounded canary dispatch test",
+    )
+    db.add(authorization)
+    db.flush()
+    policy = SmsDeliveryPolicy(
+        tenant_id=tenant.id,
+        environment="production",
+        policy_version=1,
+        enabled=True,
+        mode="TRANSACTIONAL_CANARY",
+        authorization_id=authorization.id,
+        authorization_change_id=authorization.change_id,
+        approved_senders=authorization.approved_senders,
+        approved_destinations=authorization.approved_destinations,
+        transaction_categories=authorization.approved_categories,
+        per_minute_segments=1,
+        per_hour_segments=1,
+        per_day_segments=1,
+        provider_id=authorization.provider_id,
+        billing_account_id=account.id,
+        max_total_spend_minor=200,
+        spending_currency="USD",
+        account_grain="billing_account",
+        valid_from=authorization.valid_from,
+        valid_until=authorization.valid_until,
+        approved_by="reviewer",
+        activated_by="operator",
+        system_kill_switch=False,
+        tenant_kill_switch=False,
+        sender_kill_switches=[],
+        reason="bounded canary dispatch test",
+    )
+    db.add(policy)
+    db.add(
+        SmsSystemControl(
+            environment="production",
+            control_version=1,
+            kill_switch=False,
+            reason="test canary system control explicitly opened",
+            actor="test-operator",
+        )
+    )
+    db.flush()
     message = accept_message(
         db,
         account.id,
@@ -568,12 +699,14 @@ def test_closed_canary_gate_stops_queued_job_before_adapter(monkeypatch):
         "corr-gate",
         "3" * 64,
         canary_gate_id=gate.id,
+        production_policy_id=policy.id,
     )
     db.commit()
     job = claim_job(db, "gate-worker")
     gate.enabled = False
     db.commit()
     monkeypatch.setenv("TELNEXA_PRODUCTION_SMS_ENABLED", "true")
+    monkeypatch.setenv("SOURCE_SHA", release_sha)
     calls = []
     process_job(db, job, lambda provider: calls.append(provider) or None)
     db.commit()

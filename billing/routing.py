@@ -161,6 +161,7 @@ def persist_decision(db, message, sender, authorized):
         provider_rate_snapshot={
             "id": provider_rate.id,
             "amount": str(provider_rate.amount),
+            "currency": provider_rate.currency,
             "country": provider_rate.country,
             "provider": provider.name,
             "connector": provider.connector,

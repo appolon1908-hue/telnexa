@@ -241,7 +241,15 @@ def _dlr(db, row, data):
             f"sms.{status}",
             f"sms:{status}:{provider_event_identity}",
             message.correlation_id,
-            {"message_id": message.id, "status": status},
+            {
+                "message_id": message.id,
+                "status": status,
+                "provider_message_id": message.provider_message_id,
+                "provider_event_id": provider_event_identity,
+                "provider_status": raw,
+                "segments": message.segments,
+                "message_idempotency_key": message.idempotency_key,
+            },
         )
         stored_event = db.scalar(
             select(Outbox).where(
@@ -415,7 +423,19 @@ def _mo(db, row, data):
         event_type,
         f"sms:mo:{_provider_event_identity(row)}",
         str(uuid.UUID(hex=_provider_event_identity(row)[:32])),
-        {"inbound_message_id": inbound.id},
+        {
+            "inbound_message_id": inbound.id,
+            "provider_message_id": inbound.provider_message_id,
+            "provider_event_id": _provider_event_identity(row),
+            "sender": inbound.sender,
+            "destination": inbound.destination,
+            "content": inbound.content,
+            "compliance_action": {
+                "sms.opted_out": "stop",
+                "sms.help_requested": "help",
+                "sms.opted_in": "start",
+            }.get(event_type),
+        },
     )
     stored_event = db.scalar(
         select(Outbox).where(
