@@ -29,7 +29,7 @@ def test_v2_contract_and_routes_are_present():
     contract = observability_contract("v2")
     assert contract["contract_version"] == "telnexa.observability.v2"
 
-    paths = {route.path for route in app.routes}
+    paths = set(app.openapi()["paths"])
     assert "/api/v1/integration/observability" in paths
     assert "/api/v2/integration/observability" in paths
 
