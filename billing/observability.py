@@ -117,9 +117,7 @@ def observability_contract(version: str = "v1") -> dict[str, Any]:
                 "event_path": "/api/v1/events/telnexa",
                 "runtime_observations_path": "/platform/v1/runtime/observations",
                 "heartbeats_path": "/platform/v1/telemetry/heartbeats",
-                "contract_refresh_path": (
-                    "/platform/v1/services/{service_id}/contract-refresh"
-                ),
+                "contract_refresh_path": "/platform/v1/services/{service_id}/contract-refresh",
                 "coverage_path": "/platform/v1/services/{service_id}/coverage",
                 "authentication": "tenant-bound OIDC or service identity; mTLS/HMAC for Telnexa outbox",
             },
