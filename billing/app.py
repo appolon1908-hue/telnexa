@@ -50,6 +50,7 @@ from .sms_metrics import (
 from .schemas import SendRequest, CreditRequest
 from .oidc import validate_bearer
 from .bounded_body import BoundedBodyMiddleware
+from .observability import observability_contract
 from .sms_integration import (
     bounded_reference,
     enforce_admission,
@@ -414,6 +415,16 @@ def integration_health(
         "provider_connectivity": "not_probed",
         "runtime_certified": False,
     }
+
+
+@app.get("/api/v1/integration/observability", tags=["integration"])
+def observability_v1(_: str = Depends(authn("sms.health.read"))):
+    return observability_contract("v1")
+
+
+@app.get("/api/v2/integration/observability", tags=["integration"])
+def observability_v2(_: str = Depends(authn("sms.health.read"))):
+    return observability_contract("v2")
 
 
 @app.post("/internal/v1/provider-events/jasmin", status_code=202)

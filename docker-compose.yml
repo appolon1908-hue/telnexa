@@ -324,7 +324,11 @@ services:
       OIDC_JWKS_URL: http://keycloak:8080/auth/realms/telnexa/protocol/openid-connect/certs
       OIDC_AUDIENCE: telnexa-api
       OIDC_ALLOWED_AZP: ${OIDC_ALLOWED_AZP:?set approved Codestra client identities}
+      DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:?set deployment environment}
+      SOURCE_DEPLOYMENT: ${SOURCE_DEPLOYMENT:?set source deployment}
       SOURCE_SHA: ${SOURCE_SHA:?set exact 40-character source SHA}
+      TELNEXA_BILLING_IMAGE_DIGEST: ${TELNEXA_BILLING_IMAGE_DIGEST:?set exact billing image digest}
+      TELNEXA_CONFIG_DIGEST: ${TELNEXA_CONFIG_DIGEST:?set exact config digest}
       LIVE_SMS_DELIVERY: "false"
       LIVE_EMAIL_DELIVERY: "false"
       LIVE_PSTN_DIALING: "false"

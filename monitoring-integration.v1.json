@@ -8,8 +8,11 @@
   "api_contract_url": "https://raw.githubusercontent.com/appolon1908-hue/Middleware-/cedaa23b89f84f365ae6789413411c3f01516952/contracts/observability/integrated-monitoring.openapi.json",
   "api_operation_count": 36,
   "repository_inventory_count": 63,
-  "service_ids": [],
-  "runtime_coverage": "unverified",
+  "service_ids": [
+    "telnexa-billing-api",
+    "telnexa-webhook-relay"
+  ],
+  "runtime_coverage": "contract_registered_unverified",
   "activation_enabled": false,
   "required_identity_fields": [
     "service_id",
@@ -22,12 +25,22 @@
   ],
   "signal_owners": {
     "metrics": "Codestra-Prometheus",
+    "alerts": "Codestra-Alertmanager",
+    "dashboards": "Codestra-Grafana",
+    "telemetry": "Codestra-Telemetry",
+    "collector": "Codestra-Alloy",
     "logs": "Codestra-Loki",
     "traces": "Codestra-Tempo",
-    "alerts": "Codestra-Alertmanager",
-    "catalog": "Backstage",
-    "errors": "Sentry",
-    "security": "Wazuh"
+    "host_metrics": "Codestra-Node-Exporter",
+    "container_metrics": "Codestra-cAdvisor",
+    "redis_metrics": "Codestra-Redis-Exporter",
+    "probe_metrics": "Codestra-Blackbox-Exporter",
+    "postgres_metrics": "Codestra-Postgres-Exporter",
+    "business_analytics": "Superset",
+    "secrets": "Codestra-OpenBao",
+    "catalog": "Middleware",
+    "errors": "Middleware",
+    "security": "Middleware + Codestra-OpenBao"
   },
   "control_operations": {
     "contract_import": "POST /platform/v1/services/{service_id}/contract-refresh",
@@ -44,6 +57,71 @@
     "endpoint_contract_digest",
     "private_authentication",
     "alert_delivery",
-    "restore_and_rollback"
-  ]
+    "restore_and_rollback",
+    "observability_contract_route_authentication",
+    "alertmanager_native_v4_delivery",
+    "middleware_service_registration",
+    "odoo_write_boundary_negative_test"
+  ],
+  "endpoint_contract": "contracts/observability/telnexa-monitoring.openapi.yaml",
+  "contract_version": "telnexa.observability.v1",
+  "service_units": [
+    {
+      "service_id": "telnexa-billing-api",
+      "compose_service": "billing-api",
+      "health_path": "/healthz",
+      "readiness_path": "/readyz",
+      "metrics_path": "/metrics",
+      "openapi_path": "/api/v1/openapi.json",
+      "contract_paths": [
+        "/api/v1/integration/observability",
+        "/api/v2/integration/observability"
+      ]
+    },
+    {
+      "service_id": "telnexa-webhook-relay",
+      "compose_service": "webhook-relay",
+      "health_path": "/healthz",
+      "readiness_path": null,
+      "metrics_path": null,
+      "evidence_mode": "health-and-release-evidence"
+    }
+  ],
+  "integration_targets": {
+    "middleware": {
+      "repository": "appolon1908-hue/Middleware-",
+      "role": "operational ingestion, policy, reconciliation and Odoo write boundary",
+      "routes": {
+        "alert_events": "POST /v1/integrations/alertmanager/events",
+        "alert_status": "POST /v1/integrations/alertmanager/status-events",
+        "runtime_observations": "POST /platform/v1/runtime/observations",
+        "heartbeats": "POST /platform/v1/telemetry/heartbeats",
+        "contract_refresh": "POST /platform/v1/services/{service_id}/contract-refresh",
+        "coverage": "GET /platform/v1/services/{service_id}/coverage",
+        "telnexa_events": "POST /api/v1/events/telnexa"
+      }
+    },
+    "odoo": {
+      "repository": "appolon1908-hue/Odoo",
+      "direct_write": false,
+      "writer": "Middleware",
+      "raw_telemetry": false
+    }
+  },
+  "odoo_boundary": {
+    "direct_write": false,
+    "direct_credentials": false,
+    "allowed_via_middleware": [
+      "normalized SMS KPIs",
+      "billing and reconciliation summaries",
+      "approved operational incidents",
+      "integration health and sync state"
+    ],
+    "forbidden": [
+      "raw Prometheus samples",
+      "raw logs and traces",
+      "customer message bodies",
+      "OpenBao secret values"
+    ]
+  }
 }
