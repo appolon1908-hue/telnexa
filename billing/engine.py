@@ -20,6 +20,19 @@ GSM_BASIC = set(
 )
 GSM_EXT = set("^{}\\[~]|€")
 
+MIDDLEWARE_EVENT_TYPES = {
+    "sms.delivered": "codestra.sms.message.delivered",
+    "sms.expired": "codestra.sms.message.failed",
+    "sms.failed": "codestra.sms.message.failed",
+    "sms.help_requested": "codestra.sms.help_requested",
+    "sms.inbound.received": "codestra.sms.inbound.received",
+    "sms.opted_in": "codestra.sms.recipient.opted_in",
+    "sms.opted_out": "codestra.sms.recipient.opted_out",
+    "sms.sent": "codestra.sms.message.sent",
+    "sms.submitted": "codestra.sms.message.provider_accepted",
+    "sms.undeliverable": "codestra.sms.message.failed",
+}
+
 
 def segment_info(text):
     gsm = all(c in GSM_BASIC or c in GSM_EXT for c in text)
@@ -36,6 +49,14 @@ def money(v):
 
 def event(db, tenant, event_type, key, correlation, payload):
     eid = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc)
+    middleware_event_type = MIDDLEWARE_EVENT_TYPES.get(event_type)
+    causation_id = str(
+        payload.get("provider_event_id")
+        or payload.get("message_id")
+        or payload.get("inbound_message_id")
+        or key
+    )[:180]
     db.add(
         Outbox(
             id=eid,
@@ -45,19 +66,24 @@ def event(db, tenant, event_type, key, correlation, payload):
             correlation_id=correlation,
             envelope={
                 "event_id": eid,
-                "event_type": event_type,
+                "event_type": middleware_event_type or event_type,
                 "event_version": "1.0",
-                "schema_version": 1,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "occurred_at": created_at.isoformat(),
+                "received_at": created_at.isoformat(),
                 "tenant_id": tenant,
                 "correlation_id": correlation,
-                "idempotency_key": key,
-                "source_service": "telnexa-billing",
-                "source": "telnexa",
+                "causation_id": causation_id,
+                "idempotency_key": eid,
+                "source": "telnexa-gateway",
                 "payload": payload,
-                "metadata": {},
+                "metadata": {
+                    "provider": "jasmin",
+                    "message_idempotency_key": payload.get("message_idempotency_key") or key,
+                },
             },
+            # Billing-only events remain durable local evidence. Only the
+            # explicit SMS lifecycle allowlist is eligible for Middleware.
+            state="pending" if middleware_event_type else "internal",
         )
     )
 

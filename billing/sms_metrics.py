@@ -27,3 +27,8 @@ MIDDLEWARE_OUTBOX = Gauge("telnexa_sms_middleware_outbox", "Middleware outbox", 
 CUSTOMER_WEBHOOKS = Gauge("telnexa_sms_customer_webhooks", "Customer webhooks", ["state"])
 BILLING_DRIFT = Gauge("telnexa_sms_billing_reconciliation_drift", "Billing reconciliation drift")
 CANARY_REMAINING = Gauge("telnexa_sms_canary_remaining", "Remaining canary submissions")
+PRODUCTION_POLICY_DENIALS = Counter(
+    "telnexa_sms_production_policy_denials_total",
+    "Production SMS policy denials",
+    ["reason"],
+)

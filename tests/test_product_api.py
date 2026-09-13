@@ -28,6 +28,7 @@ from billing.models import (
     Tenant,
     Wallet,
     Webhook,
+    SmsDeliveryPolicy,
 )
 import pytest
 
@@ -115,6 +116,155 @@ def headers(t, key):
 def service_headers(tenant, client_id, client_secret):
     encoded = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     return {"X-Tenant-ID": tenant.id, "Authorization": "Basic " + encoded}
+
+
+def production_operator_headers(token, idempotency_key):
+    return {
+        "X-Production-Operator-Token": token,
+        "X-Operator-ID": "release.operator@codestra",
+        "X-Correlation-ID": "11111111-1111-4111-8111-111111111111",
+        "Idempotency-Key": idempotency_key,
+    }
+
+
+def test_production_authorization_policy_and_kill_switch_are_explicit_and_idempotent(
+    tmp_path, monkeypatch
+):
+    db, tenant, account, api_key = seed()
+    provider = db.query(Provider).one()
+    provider.environment = "production"
+    provider.capabilities = {**provider.capabilities, "carrier": "didww"}
+    account.currency = "USD"
+    db.query(Wallet).one().currency = "USD"
+    for rate in db.query(Rate).all():
+        rate.currency = "USD"
+    db.add(Sender(tenant_id=tenant.id, sender="Telnexa", status="approved", countries=["DE"]))
+    db.commit()
+
+    operator_token = "production-operator-" + ("x" * 32)
+    token_file = tmp_path / "production-operator-token"
+    token_file.write_text(operator_token)
+    release_sha = "a" * 40
+    monkeypatch.setenv("TELNEXA_PRODUCTION_OPERATOR_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("SOURCE_SHA", release_sha)
+    client = TestClient(app)
+
+    reset = client.post(
+        "/api/v1/admin/sms/system-kill-switch/reset",
+        headers=production_operator_headers(operator_token, "system-reset-1"),
+        json={
+            "expected_control_version": 0,
+            "reason": "owner approved bounded production preparation",
+        },
+    )
+    assert reset.status_code == 200, reset.text
+    assert reset.json()["kill_switch"] is False
+
+    now = datetime.now(timezone.utc)
+    authorization_body = {
+        "change_id": "CHG-TELNEXA-P1",
+        "tenant_id": tenant.id,
+        "production_owner": "production-owner",
+        "approved_senders": ["Telnexa"],
+        "approved_destinations": ["+491234567"],
+        "approved_categories": ["transactional"],
+        "per_minute_segments": 1,
+        "per_hour_segments": 2,
+        "per_day_segments": 3,
+        "provider_id": provider.id,
+        "billing_account_id": account.id,
+        "max_total_spend_minor": 200,
+        "spending_currency": "USD",
+        "account_grain": "billing_account",
+        "valid_from": (now - timedelta(minutes=1)).isoformat(),
+        "valid_until": (now + timedelta(hours=1)).isoformat(),
+        "monitoring_owner": "monitoring-owner",
+        "escalation_owner": "escalation-owner",
+        "rollback_owner": "rollback-owner",
+        "kill_switch_procedure": "set TELNEXA_PRODUCTION_SMS_ENABLED false",
+        "approved_release_sha": release_sha,
+        "approved_by": "independent-reviewer",
+        "review_at": (now + timedelta(hours=1)).isoformat(),
+        "reason": "owner approved exact P1 production scope",
+    }
+    authorization_headers = production_operator_headers(
+        operator_token, "production-authorization-1"
+    )
+    authorized = client.post(
+        "/api/v1/admin/sms/authorizations",
+        headers=authorization_headers,
+        json=authorization_body,
+    )
+    assert authorized.status_code == 201, authorized.text
+    assert authorized.headers["Idempotency-Replayed"] == "false"
+    replay = client.post(
+        "/api/v1/admin/sms/authorizations",
+        headers=authorization_headers,
+        json=authorization_body,
+    )
+    assert replay.status_code == 201
+    assert replay.headers["Idempotency-Replayed"] == "true"
+    authorization = authorized.json()
+
+    activation = client.post(
+        f"/api/v1/admin/sms/delivery-policies/{tenant.id}/activate",
+        headers=production_operator_headers(operator_token, "production-activation-1"),
+        json={
+            "authorization_id": authorization["id"],
+            "mode": "TRANSACTIONAL_PRODUCTION",
+            "expected_policy_version": 0,
+            "reason": "activate exact approved transactional P1 scope",
+        },
+    )
+    assert activation.status_code == 200, activation.text
+    assert activation.json()["mode"] == "TRANSACTIONAL_PRODUCTION"
+    assert activation.json()["system_kill_switch"] is False
+
+    monkeypatch.setenv("TELNEXA_PRODUCTION_SMS_ENABLED", "true")
+    accepted = client.post(
+        "/api/v1/messages",
+        headers={
+            **headers(tenant, api_key),
+            "Idempotency-Key": "production-policy-send-1",
+            "X-Correlation-ID": "22222222-2222-4222-8222-222222222222",
+        },
+        json={
+            "billing_account_id": account.id,
+            "destination": "+491234567",
+            "sender": "Telnexa",
+            "content": "bounded production test",
+            "category": "transactional",
+        },
+    )
+    assert accepted.status_code == 202, accepted.text
+
+    kill = client.post(
+        f"/api/v1/admin/sms/delivery-policies/{tenant.id}/kill-switch/engage",
+        headers=production_operator_headers(operator_token, "tenant-kill-1"),
+        json={
+            "expected_policy_version": 1,
+            "reason": "stop new sends while preserving callback ingestion",
+        },
+    )
+    assert kill.status_code == 200, kill.text
+    assert kill.json()["tenant_kill_switch"] is True
+    denied = client.post(
+        "/api/v1/messages",
+        headers={
+            **headers(tenant, api_key),
+            "Idempotency-Key": "production-policy-send-2",
+        },
+        json={
+            "billing_account_id": account.id,
+            "destination": "+491234567",
+            "sender": "Telnexa",
+            "content": "must remain blocked",
+            "category": "transactional",
+        },
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "production_kill_switch_engaged"
+    assert db.query(SmsDeliveryPolicy).one().mode == "TRANSACTIONAL_PRODUCTION"
 
 
 def test_issued_service_account_authenticates_with_its_bounded_scopes():
