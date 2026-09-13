@@ -615,6 +615,7 @@ class SmsDispatchJob(Base):
     selected_provider_id: Mapped[str | None] = mapped_column(String(36), index=True)
     route_decision_id: Mapped[str | None] = mapped_column(String(36))
     canary_gate_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    production_policy_id: Mapped[str | None] = mapped_column(String(36), index=True)
     last_error_class: Mapped[str | None] = mapped_column(String(80))
     last_error_code: Mapped[str | None] = mapped_column(String(120))
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -728,5 +729,105 @@ class SmsProductionCanaryGate(Base):
     approval_reference: Mapped[str] = mapped_column(String(255))
     approved_by: Mapped[str] = mapped_column(String(120))
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class SmsProductionAuthorization(Base):
+    """Immutable owner authorization for one bounded production SMS scope."""
+
+    __tablename__ = "sms_production_authorizations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    change_id: Mapped[str] = mapped_column(String(120), unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(180), unique=True)
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    environment: Mapped[str] = mapped_column(String(20), default="production")
+    production_owner: Mapped[str] = mapped_column(String(120))
+    approved_senders: Mapped[list] = mapped_column(JSON)
+    approved_destinations: Mapped[list] = mapped_column(JSON)
+    approved_categories: Mapped[list] = mapped_column(JSON)
+    per_minute_segments: Mapped[int] = mapped_column(Integer)
+    per_hour_segments: Mapped[int] = mapped_column(Integer)
+    per_day_segments: Mapped[int] = mapped_column(Integer)
+    provider_id: Mapped[str] = mapped_column(String(36), index=True)
+    billing_account_id: Mapped[str] = mapped_column(String(36), index=True)
+    max_total_spend_minor: Mapped[int] = mapped_column(Integer)
+    spending_currency: Mapped[str] = mapped_column(String(3))
+    account_grain: Mapped[str] = mapped_column(String(40))
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    monitoring_owner: Mapped[str] = mapped_column(String(120))
+    escalation_owner: Mapped[str] = mapped_column(String(120))
+    rollback_owner: Mapped[str] = mapped_column(String(120))
+    kill_switch_procedure: Mapped[str] = mapped_column(String(500))
+    approved_release_sha: Mapped[str] = mapped_column(String(64))
+    approved_by: Mapped[str] = mapped_column(String(120))
+    authorization_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    review_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class SmsProductionAuthorizationRevocation(Base):
+    """Append-only revocation; authorization rows are never mutated."""
+
+    __tablename__ = "sms_production_authorization_revocations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    authorization_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(180), unique=True)
+    revoked_by: Mapped[str] = mapped_column(String(120))
+    correlation_id: Mapped[str] = mapped_column(String(36))
+    reason: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class SmsDeliveryPolicy(Base):
+    """Single current production-delivery policy for a tenant and environment."""
+
+    __tablename__ = "sms_delivery_policies"
+    __table_args__ = (UniqueConstraint("tenant_id", "environment"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    environment: Mapped[str] = mapped_column(String(20), default="production")
+    policy_version: Mapped[int] = mapped_column(Integer, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    mode: Mapped[str] = mapped_column(String(40), default="SAFE")
+    authorization_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    authorization_change_id: Mapped[str | None] = mapped_column(String(120))
+    approved_senders: Mapped[list] = mapped_column(JSON, default=list)
+    approved_destinations: Mapped[list] = mapped_column(JSON, default=list)
+    recipient_scope: Mapped[str] = mapped_column(String(40), default="exact_allowlist")
+    transaction_categories: Mapped[list] = mapped_column(JSON, default=list)
+    per_minute_segments: Mapped[int] = mapped_column(Integer, default=0)
+    per_hour_segments: Mapped[int] = mapped_column(Integer, default=0)
+    per_day_segments: Mapped[int] = mapped_column(Integer, default=0)
+    provider_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    billing_account_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    max_total_spend_minor: Mapped[int] = mapped_column(Integer, default=0)
+    spending_currency: Mapped[str | None] = mapped_column(String(3))
+    account_grain: Mapped[str] = mapped_column(String(40), default="billing_account")
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_by: Mapped[str | None] = mapped_column(String(120))
+    activated_by: Mapped[str | None] = mapped_column(String(120))
+    system_kill_switch: Mapped[bool] = mapped_column(Boolean, default=True)
+    tenant_kill_switch: Mapped[bool] = mapped_column(Boolean, default=True)
+    sender_kill_switches: Mapped[list] = mapped_column(JSON, default=list)
+    reason: Mapped[str] = mapped_column(String(500), default="not authorized")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class SmsSystemControl(Base):
+    """Global production dispatch kill switch; callbacks and evidence stay active."""
+
+    __tablename__ = "sms_system_controls"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    environment: Mapped[str] = mapped_column(String(20), unique=True, default="production")
+    control_version: Mapped[int] = mapped_column(Integer, default=1)
+    kill_switch: Mapped[bool] = mapped_column(Boolean, default=True)
+    reason: Mapped[str] = mapped_column(String(500), default="not authorized")
+    actor: Mapped[str] = mapped_column(String(120), default="system")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

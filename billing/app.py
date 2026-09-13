@@ -38,11 +38,19 @@ from .engine import credit
 from .dispatch import accept_message
 from .message_idempotency import lock_message_key, recover_message_insert_race
 from .provider_events import ingest, parse_payload, verify_signature
-from .production_gates import production_enabled, reserve_canary
-from .sms_metrics import CANARY_REMAINING, DISPATCH_JOBS, SUBMISSION_UNKNOWN, UNMATCHED_EVENTS
+from .production_gates import production_enabled
+from .production_policy import ProductionPolicyDenied, validate_production_readiness
+from .sms_metrics import (
+    CANARY_REMAINING,
+    DISPATCH_JOBS,
+    PRODUCTION_POLICY_DENIALS,
+    SUBMISSION_UNKNOWN,
+    UNMATCHED_EVENTS,
+)
 from .schemas import SendRequest, CreditRequest
 from .oidc import validate_bearer
 from .bounded_body import BoundedBodyMiddleware
+from .observability import observability_contract
 from .sms_integration import (
     bounded_reference,
     enforce_admission,
@@ -50,6 +58,7 @@ from .sms_integration import (
     replay_receipt,
     store_receipt,
 )
+from .production_policy_api import router as production_policy_router
 
 app = FastAPI(
     title="Telnexa Commercial API",
@@ -164,7 +173,10 @@ def authn(required="read"):
 @app.get("/health")
 def health(db: Session = Depends(session)):
     db.execute(select(1))
-    return {"status": "ok", "simulator": True}
+    return {
+        "status": "ok",
+        "simulator": os.environ.get("BILLING_SIMULATOR_ENABLED", "true").lower() == "true",
+    }
 
 
 @app.get("/healthz")
@@ -186,10 +198,14 @@ def readyz(db: Session = Depends(session)):
         from .dispatch_worker import validate_provider_credentials
 
         try:
+            policy = validate_production_readiness(db)
             validated = validate_provider_credentials(db)
         except RuntimeError as exc:
             raise HTTPException(503, str(exc))
-        return {"status": "ready", "provider_credentials": {key: "readable" for key in validated}}
+        return {
+            **policy,
+            "provider_credentials": {key: "readable" for key in validated},
+        }
     return {"status": "ready", "production_sms": "disabled"}
 
 
@@ -312,12 +328,6 @@ def send(
             )
             if not campaign or campaign.status != "approved":
                 raise HTTPException(403, "campaign_not_approved")
-        canary_gate = reserve_canary(db, tenant_id, body.sender, body.destination)
-        if not canary_gate:
-            db.rollback()
-            raise HTTPException(403, "production_canary_gate_denied")
-    else:
-        canary_gate = None
     try:
         msg = accept_message(
             db,
@@ -329,7 +339,6 @@ def send(
             idempotency_key,
             x_correlation_id or str(uuid.uuid4()),
             request_hash=request_hash,
-            canary_gate_id=canary_gate.id if canary_gate else None,
         )
         accepted_response = store_receipt(db, msg, body, message_json(msg))
         db.commit()
@@ -339,6 +348,17 @@ def send(
         msg = recover_message_insert_race(db, tenant_id, idempotency_key, request_hash, exc)
         DUPES.inc()
         return replay_receipt(db, msg)
+    except ProductionPolicyDenied as exc:
+        db.rollback()
+        SENDS.labels("rejected").inc()
+        PRODUCTION_POLICY_DENIALS.labels(exc.code).inc()
+        status = (
+            429
+            if exc.code.endswith("quota_exceeded")
+            or exc.code == "production_spend_ceiling_exceeded"
+            else 403
+        )
+        raise HTTPException(status, exc.code)
     except ValueError as e:
         db.rollback()
         SENDS.labels("rejected").inc()
@@ -395,6 +415,16 @@ def integration_health(
         "provider_connectivity": "not_probed",
         "runtime_certified": False,
     }
+
+
+@app.get("/api/v1/integration/observability", tags=["integration"])
+def observability_v1(_: str = Depends(authn("sms.health.read"))):
+    return observability_contract("v1")
+
+
+@app.get("/api/v2/integration/observability", tags=["integration"])
+def observability_v2(_: str = Depends(authn("sms.health.read"))):
+    return observability_contract("v2")
 
 
 @app.post("/internal/v1/provider-events/jasmin", status_code=202)
@@ -813,3 +843,4 @@ app.include_router(auth_router)
 from .canonical_api import router as canonical_router
 
 app.include_router(canonical_router)
+app.include_router(production_policy_router)
