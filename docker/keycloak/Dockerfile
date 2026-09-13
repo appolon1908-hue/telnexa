@@ -6,10 +6,10 @@ ARG KEYCLOAK_BASE_IMAGE=quay.io/keycloak/keycloak:26.7.3@sha256:88943b6ad06d6293
 # published SHA-256 values and are verified again in the final image.
 FROM scratch AS netty-security-fix
 ADD --checksum=sha256:d0e4c6ee4779f59f6ab2fb5d388e4f57147c82270164b37945764bb9bda96a44 \
-    https://repo1.maven.org/maven2/io/netty/netty-handler/4.1.137.Final/netty-handler-4.1.137.Final.jar \
+    https://repo.maven.apache.org/maven2/io/netty/netty-handler/4.1.137.Final/netty-handler-4.1.137.Final.jar \
     /io.netty.netty-handler-4.1.137.Final.jar
 ADD --checksum=sha256:0535bb5a736472bef5c948d15eb273c4ab9f796656fc7c5d6b982ad92bddbd49 \
-    https://repo1.maven.org/maven2/io/netty/netty-codec-http/4.1.137.Final/netty-codec-http-4.1.137.Final.jar \
+    https://repo.maven.apache.org/maven2/io/netty/netty-codec-http/4.1.137.Final/netty-codec-http-4.1.137.Final.jar \
     /io.netty.netty-codec-http-4.1.137.Final.jar
 
 FROM ${KEYCLOAK_BASE_IMAGE} AS builder
