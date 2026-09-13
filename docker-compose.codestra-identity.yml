@@ -1,0 +1,7 @@
+# Source-only opt-in machine trust. Local portal issuer/audience/JWKS are unchanged.
+# Do not apply until independently reviewed identity and private-route staging pass.
+services:
+  billing-api:
+    environment:
+      CODESTRA_OIDC_ENABLED: ${CODESTRA_OIDC_ENABLED:-false}
+      CODESTRA_OIDC_ALLOWED_AZP: ${CODESTRA_OIDC_ALLOWED_AZP:-}

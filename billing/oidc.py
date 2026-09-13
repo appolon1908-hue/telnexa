@@ -5,6 +5,9 @@ import urllib.request
 import jwt
 from fastapi import HTTPException
 
+from billing.codestra_identity import ISSUER as CODESTRA_ISSUER
+from billing.codestra_identity import token_issuer, validate_codestra_token
+
 _cache = {"at": 0.0, "keys": []}
 ROLE_SCOPES = {
     "OWNER": {"*"},
@@ -43,12 +46,18 @@ def validate_bearer(authorization: str | None, tenant_id: str | None, required: 
     if not authorization or not authorization.startswith("Bearer "):
         return None
     token = authorization[7:]
+    # The untrusted issuer selects ONLY a fixed verifier, never a URL or grants.
+    # Signature, issuer, audience, client, tenant and scope are checked there.
+    if token_issuer(token) == CODESTRA_ISSUER:
+        return validate_codestra_token(token, tenant_id, required)
     issuer = os.environ.get("OIDC_ISSUER", "").rstrip("/")
     audience = os.environ.get("OIDC_AUDIENCE", "telnexa-api")
-    if issuer != "https://api.telnexa.co/auth/realms/telnexa":
+    if issuer != "https://api.telnexa.co/auth/realms/telnexa" or audience != "telnexa-api":
         raise HTTPException(503, "canonical_identity_unavailable")
     try:
         header = jwt.get_unverified_header(token)
+        if header.get("alg") != "RS256" or not header.get("kid"):
+            raise ValueError("unsupported_token_header")
         key = jwt.PyJWK.from_dict(_jwks()[header["kid"]]).key
         claims = jwt.decode(
             token,
@@ -56,8 +65,10 @@ def validate_bearer(authorization: str | None, tenant_id: str | None, required: 
             algorithms=["RS256"],
             issuer=issuer,
             audience=audience,
-            options={"require_exp": True, "require_iat": True, "require_jti": True},
+            options={"require": ["exp", "iat", "jti", "sub", "iss", "aud", "azp"]},
         )
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(401, "invalid_access_token")
     allowed_clients = {

@@ -1,0 +1,23 @@
+{
+  "schema_version": "2.0",
+  "system": "telnexa-sms",
+  "authority": ["accounts", "senders", "templates", "messages", "routing_intent", "billing", "jasmin_mappings", "submission_state", "dlr_mo", "optout_compliance", "usage", "provider_health"],
+  "internal_engines": ["Jasmin", "RabbitMQ", "Redis"],
+  "integration_boundary": "MIDDLEWARE_ONLY",
+  "n8n_direct_access": false,
+  "jasmin_direct_access": false,
+  "smpp_credentials_in_n8n": false,
+  "service_identity": "telnexa-gateway",
+  "jasmin_internal_username": "telnexa-adapter",
+  "event_delivery": "DURABLE_INBOX_AND_TRANSACTIONAL_OUTBOX",
+  "unknown_submission_reconcile_before_retry": true,
+  "unknown_submission_blind_resubmit": false,
+  "success_authority": "TELNEXA_PROVIDER_RECONCILIATION",
+  "capabilities": {
+    "SMS_DELIVERY": false,
+    "SMS_CAMPAIGN_SEND": false,
+    "SMS_SENDER_WRITE": false,
+    "ODOO_WRITE": false,
+    "DEAD_LETTER_REPLAY": false
+  }
+}
