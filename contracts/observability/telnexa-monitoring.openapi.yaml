@@ -1,0 +1,192 @@
+openapi: 3.1.0
+info:
+  title: Telnexa Observability Integration API
+  version: 1.0.0
+  description: >-
+    Read-only service identity and signal ownership contract for connecting the
+    Telnexa SMS runtime to Middleware and the shared Codestra monitoring stack.
+    Middleware is the only cross-system writer and the only service allowed to
+    write Odoo.
+  x-platform-suite: Kyyow Communications
+  x-repository: appolon1908-hue/telnexa
+servers:
+  - url: https://api.telnexa.co
+    description: Telnexa API edge
+tags:
+  - name: integration
+    description: Authenticated service discovery and observability metadata
+paths:
+  /api/v1/integration/observability:
+    get:
+      tags: [integration]
+      operationId: getTelnexaObservabilityV1
+      summary: Read the Telnexa v1 observability contract
+      security:
+        - tenantHeader: []
+          bearerAuth: []
+        - tenantHeader: []
+          apiKeyAuth: []
+        - tenantHeader: []
+          serviceBasic: []
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      responses:
+        '200':
+          $ref: '#/components/responses/ObservabilityContractV1'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v2/integration/observability:
+    get:
+      tags: [integration]
+      operationId: getTelnexaObservabilityV2
+      summary: Read the Telnexa v2 observability contract
+      security:
+        - tenantHeader: []
+          bearerAuth: []
+        - tenantHeader: []
+          apiKeyAuth: []
+        - tenantHeader: []
+          serviceBasic: []
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+      responses:
+        '200':
+          $ref: '#/components/responses/ObservabilityContractV2'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+components:
+  securitySchemes:
+    tenantHeader:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant binding required for every authenticated request.
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    serviceBasic:
+      type: http
+      scheme: basic
+      description: One-time service-account credential; never place it in a URL.
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 120
+  responses:
+    Unauthorized:
+      description: Authentication is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: The authenticated identity lacks the service-read scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ObservabilityContractV1:
+      description: Telnexa service metadata and monitoring ownership.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ObservabilityContract'
+    ObservabilityContractV2:
+      description: Telnexa service metadata and monitoring ownership using the v2 contract identifier.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ObservabilityContract'
+  schemas:
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+    ObservabilityContract:
+      type: object
+      additionalProperties: false
+      required:
+        - schema_version
+        - contract_version
+        - service
+        - deployment
+        - endpoints
+        - signals
+        - signal_owners
+        - integration
+        - security
+      properties:
+        schema_version:
+          type: integer
+          const: 1
+        contract_version:
+          type: string
+          pattern: '^telnexa\.observability\.v[12]$'
+        service:
+          $ref: '#/components/schemas/ServiceIdentity'
+        deployment:
+          $ref: '#/components/schemas/DeploymentIdentity'
+        endpoints:
+          type: object
+          additionalProperties:
+            type: string
+        signals:
+          type: object
+          additionalProperties: true
+        signal_owners:
+          type: object
+          additionalProperties:
+            type: string
+        integration:
+          type: object
+          additionalProperties: true
+        security:
+          type: object
+          additionalProperties: true
+    ServiceIdentity:
+      type: object
+      additionalProperties: false
+      required: [service_id, name, suite, repository, domain, tenant_mode]
+      properties:
+        service_id:
+          type: string
+          const: telnexa-billing-api
+        name:
+          type: string
+        suite:
+          type: string
+        repository:
+          type: string
+          const: appolon1908-hue/telnexa
+        domain:
+          type: string
+          const: sms
+        tenant_mode:
+          type: string
+          const: multi-tenant
+    DeploymentIdentity:
+      type: object
+      additionalProperties: false
+      required: [environment, source_deployment, git_sha, image_digest, config_digest]
+      properties:
+        environment: {type: string}
+        source_deployment: {type: string}
+        git_sha: {type: string}
+        image_digest: {type: string}
+        config_digest: {type: string}

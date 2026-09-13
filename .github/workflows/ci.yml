@@ -11,6 +11,10 @@ permissions:
 
 env:
   SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  DEPLOYMENT_ENVIRONMENT: ci
+  SOURCE_DEPLOYMENT: github-actions
+  TELNEXA_BILLING_IMAGE_DIGEST: sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  TELNEXA_CONFIG_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
   TELNEXA_KEYCLOAK_IMAGE: telnexa/keycloak@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   TELNEXA_JASMIN_IMAGE: telnexa/jasmin@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   TELNEXA_WEBHOOK_RELAY_IMAGE: telnexa/webhook-relay@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

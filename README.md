@@ -187,3 +187,11 @@ An API message remains queued while production SMS is disabled. A 426 from Nginx
 ## Upgrade procedure
 
 Read upstream release and migration notes, run `scripts/backup.sh`, test on a clone, update one pinned major/minor image at a time, and run `docker compose config`, image builds, health/auth tests, persistence recreation, and a provider bind test. Use `scripts/update.sh` for ordinary fast-forward deployments. Never delete volumes during an upgrade unless a documented migration explicitly requires it.
+
+
+## Monitoring integration
+
+The Telnexa monitoring contract is implemented at
+[docs/TELNEXA_MONITORING_MIDDLEWARE_ODOO_API.md](docs/TELNEXA_MONITORING_MIDDLEWARE_ODOO_API.md).
+Prometheus scrapes the private `/metrics` endpoint, Alertmanager sends native
+v4 transitions to Middleware, and Middleware remains the only Odoo writer.
